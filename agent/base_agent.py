@@ -1,77 +1,108 @@
+from langchain_ollama.chat_models import ChatOllama
+from langchain.agents import create_agent
+from agent.actions import observe, move, interact, attack, wait
 
-class BaseAgent:
-    """
-    BaseAgent defines a LLM-powered agentic player in the game.
-    Each player has a name, a perona, goals and memory.
-    """
-    def __init__(self, name, persona, goals, llm):
-        self.name = name
-        self.persona = persona
-        self.goals = goals
-        self.llm = llm
+qwen3_5 = ChatOllama(model="qwen3.5:latest", temperature=0.1)
+glm4 = ChatOllama(model="glm4:9b", temperature=0.1)
+ds_r1 = ChatOllama(model="deepseek-r1:latest", temperature=0.1)
 
-        self.memory = []
-        self.reflections = []
+tools = [observe, move, interact, attack, wait]
 
-    def observe(self, world_state):
-        observation = self._extract_relevant(world_state)
-        self.memory.append(observation)
-        return observation
+def create_player_qwen3_5(player_prompt):
+    return create_agent(
+        model=qwen3_5,
+        tools=tools,
+        system_prompt=player_prompt
+    )
 
-    def reflect(self):
-        reflection_prompt = self._build_reflection_prompt()
-        reflection = self.llm(reflection_prompt)
-        self.reflections.append(reflection)
-        return reflection
+def create_player_glm4(player_prompt):
+    return create_agent(
+        model=glm4,
+        tools=tools,
+        system_prompt=player_prompt
+    )
 
-    def plan(self):
-        plan_prompt = self._build_plan_prompt()
-        plan = self.llm(plan_prompt)
-        return plan
+def create_player_ds_r1(player_prompt):
+    return create_agent(
+        model=ds_r1,
+        tools=tools,
+        system_prompt=player_prompt
+    )
 
-    def act(self, world_state):
-        action_prompt = self._build_action_prompt(world_state)
-        action = self.llm(action_prompt)
-        return action
+
+# class BaseAgent:
+#     """
+#     BaseAgent defines a LLM-powered agentic player in the game.
+#     Each player has a name, a perona, goals and memory.
+#     """
+#     def __init__(self, name, persona, goals, llm=LLM):
+#         self.name = name
+#         self.persona = persona
+#         self.goals = goals
+#         self.llm = llm
+
+#         self.memory = []
+#         self.reflections = []
+
+#     def observe(self, world_state):
+#         observation = self._extract_relevant(world_state)
+#         self.memory.append(observation)
+#         return observation
+
+#     def reflect(self):
+#         reflection_prompt = self._build_reflection_prompt()
+#         reflection = self.llm(reflection_prompt)
+#         self.reflections.append(reflection)
+#         return reflection
+
+#     def plan(self):
+#         plan_prompt = self._build_plan_prompt()
+#         plan = self.llm(plan_prompt)
+#         return plan
+
+#     def act(self, world_state):
+#         action_prompt = self._build_action_prompt(world_state)
+#         action = self.llm(action_prompt)
+#         return action
     
-    def take_turn(self, world_state):
-        observation = self.observe(world_state)
-        action = self.decide(observation)
-        self.memory.append({
-            "observation": observation,
-            "action": action
-        })
-        return action
+#     def take_turn(self, world_state):
+#         observation = self.observe(world_state)
+#         action = self.decide(observation)
+#         self.memory.append({
+#             "observation": observation,
+#             "action": action
+#         })
+#         return action
     
-    def decide(self, observation):
-        prompt = f"""
-            Agent: {self.name}
+#     def decide(self, observation):
+#         prompt = f"""
+#             Agent: {self.name}
 
-            Persona:
-            {self.persona}
+#             Persona:
+#             {self.persona}
 
-            Goals:
-            {self.goals}
+#             Goals:
+#             {self.goals}
 
-            Observation:
-            {observation}
+#             Observation:
+#             {observation}
 
-            Recent Memory:
-            {self.memory[-5:]}
+#             Recent Memory:
+#             {self.memory[-5:]}
 
-            Choose ONE action.
+#             Choose ONE action.
 
-            Available actions:
-            1. observe
-            2. move
-            3. interact
-            4. attack
-            5. wait
-            
-            Respond with JSON.
-        """
-        response = self.llm(prompt)
+#             Available actions:
+#             1. observe
+#             2. move
+#             3. interact
+#             4. attack
+#             5. wait
 
-        action = parse_action(response)
+#             Respond with JSON.
+#         """
+#         response = self.llm(prompt)
 
-        return action
+#         action = parse_action(response)
+
+#         # return action

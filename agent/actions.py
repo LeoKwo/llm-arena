@@ -1,67 +1,81 @@
-class BaseAction:
-    """
-    BaseAction is the base class of Action
-    """
-    def __init__(self, action, target=None, parameters=None, reason=None):
-        self.action = action
-        self.target = target
-        self.parameters = parameters or {}
-        self.reason = reason
+from langchain.tools import tool
 
-    def to_dict(self):
-        return {
-            "action": self.action,
-            "target": self.target,
-            "parameters": self.parameters,
-            "reason": self.reason
-        }
 
-    def __repr__(self):
-        return str(self.to_dict())
+# class BaseAction:
+#     """
+#     BaseAction is the base class of Action
+#     """
+#     def __init__(self, action, target=None, parameters=None, reason=None):
+#         self.action = action
+#         self.target = target
+#         self.parameters = parameters or {}
+#         self.reason = reason
+
+#     def to_dict(self):
+#         return {
+#             "action": self.action,
+#             "target": self.target,
+#             "parameters": self.parameters,
+#             "reason": self.reason
+#         }
+
+#     def __repr__(self):
+#         return str(self.to_dict())
     
 
-class Observe(BaseAction):
-    def __init__(self, target, reason=None):
-        super().__init__(
-            action="observe",
-            target=target,
-            reason=reason
-        )
+@tool
+def observe(target: str, reason: str = "") -> str:
+    """
+    Observe an agent, location, or object.
 
-class Move(BaseAction):
-    def __init__(self, target, reason=None):
-        super().__init__(
-            action="move",
-            target=target,
-            reason=reason
-        )
+    Args:
+        target: The object or agent to observe
+        reason: Why the agent is observing
+    """
+    # Here you could query environment state
+    return f"Observed {target}. Reason: {reason}"
 
-class Interact(BaseAction):
-    def __init__(self, target, method, reason=None):
-        super().__init__(
-            action="interact",
-            target=target,
-            parameters={
-                "method": method
-            },
-            reason=reason
-        )
+@tool
+def move(target: str, reason: str = "") -> str:
+    """
+    Move the agent to a location or position.
 
-class Attack(BaseAction):
-    def __init__(self, target, method="direct", reason=None):
-        super().__init__(
-            action="attack",
-            target=target,
-            parameters={
-                "method": method
-            },
-            reason=reason
-        )
+    Args:
+        target: Destination location
+        reason: Why the agent is moving
+    """
+    return f"Moved to {target}. Reason: {reason}"
 
-class Wait(BaseAction):
-    def __init__(self, reason=None):
-        super().__init__(
-            action="wait",
-            reason=reason
-        )
+@tool
+def interact(target: str, method: str, reason: str = "") -> str:
+    """
+    Interact with another agent or object.
 
+    Args:
+        target: The agent or object to interact with
+        method: The type of interaction (talk, trade, threaten, etc.)
+        reason: Why this interaction is happening
+    """
+    return f"Interacted with {target} via {method}. Reason: {reason}"
+
+@tool
+def attack(target: str, method: str = "direct", reason: str = "") -> str:
+    """
+    Attack a target agent or location.
+
+    Args:
+        target: The target of the attack
+        method: Attack method (direct, ambush, sabotage)
+        reason: Strategic reason for attack
+    """
+    return f"Attacked {target} via {method}. Reason: {reason}"
+
+@tool
+def wait(reason: str = "") -> str:
+    """
+    Wait / skip turn.
+
+    Args:
+        reason: Why the agent is waiting
+    """
+    return f"Waiting. Reason: {reason}"
