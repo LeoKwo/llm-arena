@@ -66,6 +66,7 @@ UK_MODEL=
 # ---- Embedding（用于智能体记忆 / FAISS）----
 EMBEDDING_PROVIDER=zhipu
 EMBEDDING_MODEL=embedding-3
+# 注意：填 base URL（例如 https://open.bigmodel.cn/api/paas/v4），不要带结尾的 /embeddings
 EMBEDDING_BASE_URL=
 EMBEDDING_API_KEY=
 ```

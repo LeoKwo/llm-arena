@@ -183,10 +183,19 @@ def build_embeddings(provider=None, model=None, base_url=None, api_key=None):
             f"Missing API key for embedding provider '{provider}'. "
             f"Set EMBEDDING_API_KEY or one of: {', '.join(spec['env'])}"
         )
+
+    resolved_base_url = (base_url or spec["base_url"] or "").rstrip("/")
+    # OPENAI-compatible clients append "/embeddings" themselves; tolerate users
+    # pasting the full endpoint URL (e.g. .../v4/embeddings) as the base.
+    if resolved_base_url.endswith("/embeddings"):
+        resolved_base_url = resolved_base_url[: -len("/embeddings")]
+
     from langchain_openai import OpenAIEmbeddings
 
     return OpenAIEmbeddings(
         model=model,
-        base_url=base_url or spec["base_url"],
+        base_url=resolved_base_url,
         api_key=resolved_key,
+        # OpenAI-compatible providers expect raw text, not tiktoken token IDs.
+        check_embedding_ctx_length=False,
     )
