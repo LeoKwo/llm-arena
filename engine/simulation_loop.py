@@ -102,6 +102,10 @@ def run(
             if stop_requested():
                 break
             world.turn = turn
+            world.start_round()
+            for note in world.take_broadcasts():
+                emit({"type": "broadcast", "event": note})
+            emit({"type": "world_state", "world": world.snapshot()})
             emit({"type": "turn_start", "turn": turn})
 
             order = list(agents.keys())

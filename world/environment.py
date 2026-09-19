@@ -53,6 +53,26 @@ SUPPLY_RANGE = _env_int("SUPPLY_RANGE", 3)
 RELATION_DECAY = _env_float("RELATION_DECAY", 3.0)
 GOAL_SCORE_BONUS = _env_float("GOAL_SCORE_BONUS", 0.5)
 
+# --- Territory / capitals ---
+CITY_SCORE = _env_float("CITY_SCORE", 50.0)
+TILE_SCORE = _env_float("TILE_SCORE", 5.0)
+OCCUPATION_MIN_RESOURCES = _env_float("OCCUPATION_MIN_RESOURCES", 5.0)
+CAPITAL_ANNEX_PROTECT_TURNS = _env_int("CAPITAL_ANNEX_PROTECT_TURNS", 2)
+CAPITAL_HOLD_ROUNDS = _env_int("CAPITAL_HOLD_ROUNDS", 1)
+ANNEX_CITY_KEEP = _env_float("ANNEX_CITY_KEEP", 0.75)
+
+# --- Forced march ---
+EXTRA_MOVE_BASE = _env_float("EXTRA_MOVE_BASE", 4.0)
+EXTRA_MOVE_GROWTH = _env_float("EXTRA_MOVE_GROWTH", 2.0)
+MAX_FORCED_MARCH = _env_int("MAX_FORCED_MARCH", 5)
+MIN_FORCED_MARCH_RESERVE = _env_float("MIN_FORCED_MARCH_RESERVE", 1.0)
+
+
+def forced_march_cost(steps: int) -> int:
+    return _floor(
+        sum(EXTRA_MOVE_BASE * (EXTRA_MOVE_GROWTH ** i) for i in range(steps))
+    )
+
 CAPITAL_OF = {capital: nation for nation, capital in hexmap.CAPITALS.items()}
 
 
@@ -83,7 +103,7 @@ class Tile:
 
 
 class Unit:
-    __slots__ = ("id", "owner", "tile", "resources", "ap")
+    __slots__ = ("id", "owner", "tile", "resources", "ap", "acted")
 
     def __init__(
         self, unit_id: str, owner: str, tile: Tile, resources: float, ap: int = MAX_AP
@@ -93,6 +113,7 @@ class Unit:
         self.tile = tile
         self.resources = float(resources)
         self.ap = ap
+        self.acted = False
 
 
 def build_default_world(seed=None) -> "World":
@@ -122,6 +143,20 @@ def build_default_world(seed=None) -> "World":
     return World(tiles=tiles, cities=cities, agents=agents)
 
 
+def _score_tagged(method):
+    """Append the acting faction's score change to an action result string."""
+
+    def wrapper(self, owner, *args, **kwargs):
+        before = self.score(owner) if owner in self.agents else 0.0
+        result = method(self, owner, *args, **kwargs)
+        if isinstance(result, str) and owner in self.agents:
+            result += self._score_note(owner, before)
+        return result
+
+    wrapper.__name__ = method.__name__
+    return wrapper
+
+
 class World:
     def __init__(
         self,
@@ -145,6 +180,13 @@ class World:
         self.eliminated: list[str] = []
         self.spawns_this_turn: dict[str, int] = {name: 0 for name in agents}
         self.broadcasts: list[dict] = []
+        self.capital_hold: dict[str, int] = {}
+        self.last_score_delta: dict[str, float] = {name: 0.0 for name in agents}
+        self._score_mark: dict[str, float] = {name: 0.0 for name in agents}
+
+    def _score_note(self, owner: str, before: float) -> str:
+        after = self.score(owner)
+        return f" [score {int(before)} -> {int(after)}, {int(after) - int(before):+d}]"
 
     def _broadcast(self, kind: str, **data) -> None:
         self.broadcasts.append({"kind": kind, **data})
@@ -182,13 +224,20 @@ class World:
 
     def controller_of(self, tile: Tile) -> Optional[str]:
         """Cities are owned persistently; land is controlled only while a unit
-        with at least 1 resource stands on it."""
+        with at least OCCUPATION_MIN_RESOURCES stands on it."""
         if tile.is_city:
             return tile.owner
         for unit in self.units_on(tile):
-            if unit.resources >= 1:
+            if unit.resources >= OCCUPATION_MIN_RESOURCES:
                 return unit.owner
         return None
+
+    def controlled_tiles(self, agent_name: str) -> int:
+        tiles = set()
+        for unit in self.units_of(agent_name):
+            if unit.resources >= OCCUPATION_MIN_RESOURCES and not unit.tile.is_city:
+                tiles.add(unit.tile.coords)
+        return len(tiles)
 
     def relation(self, a: str, b: str) -> float:
         if a == b:
@@ -237,6 +286,7 @@ class World:
         self._pay_upkeep(agent_name)
         for unit in self.units_of(agent_name):
             unit.ap = MAX_AP
+            unit.acted = False
         self.spawns_this_turn[agent_name] = 0
 
     def _pay_upkeep(self, agent_name: str) -> None:
@@ -254,12 +304,15 @@ class World:
             self._check_elimination(agent_name)
 
     def end_faction_turn(self, agent_name: str) -> None:
-        """Units that spent no action points recover a little strength."""
+        """Units that took no action recover a little strength."""
         if not self.agents[agent_name]["alive"]:
             return
         for unit in self.units_of(agent_name):
-            if unit.ap >= MAX_AP:
+            if not unit.acted:
                 unit.resources += RECOVERY_PER_TURN
+        now = self.score(agent_name)
+        self.last_score_delta[agent_name] = now - self._score_mark.get(agent_name, now)
+        self._score_mark[agent_name] = now
 
     def advance(self) -> None:
         self.turn += 1
@@ -276,6 +329,7 @@ class World:
         self._unit_seq += 1
         return f"U{self._unit_seq}"
 
+    @_score_tagged
     def spawn_unit(self, owner: str, city_name: str, amount, reason: str = "") -> str:
         if not self.agents[owner]["alive"]:
             return f"{owner} has been eliminated and cannot act."
@@ -312,6 +366,7 @@ class World:
         self._record(owner, "spawn_unit", city_name, result, reason)
         return result
 
+    @_score_tagged
     def disband_unit(self, owner: str, unit_id: str, reason: str = "") -> str:
         unit = self.units.get(unit_id)
         if unit is None or unit.owner != owner:
@@ -332,6 +387,7 @@ class World:
         self._record(owner, "disband_unit", tile.city_name, result, reason, unit_id=unit_id)
         return result
 
+    @_score_tagged
     def merge_units(
         self, owner: str, unit_id: str, other_id: str, reason: str = ""
     ) -> str:
@@ -349,6 +405,7 @@ class World:
             return f"{unit_id} cannot merge right now."
         unit.resources += other.resources
         unit.ap = min(unit.ap, other.ap)
+        unit.acted = True
         self._remove_unit(other.id)
         result = (
             f"{unit_id} absorbed {other_id}: now {int(unit.resources)} resources "
@@ -358,6 +415,7 @@ class World:
         return result
 
     # --------------------------------------------------------------- movement
+    @_score_tagged
     def move_unit(
         self, owner: str, unit_id: str, direction: str, reason: str = ""
     ) -> str:
@@ -385,47 +443,11 @@ class World:
         origin = unit.tile
         location = target.city_name or f"({target.q},{target.r})"
         unit.ap -= MOVE_AP
-        defenders = [u for u in self.units_on(target) if u.owner != owner]
-
-        if defenders:
-            defense = sum(u.resources for u in defenders) + GARRISON_DEFENSE_BONUS
-            if unit.resources > defense:
-                for enemy in list(defenders):
-                    self._remove_unit(enemy.id)
-                unit.resources = max(
-                    0.0, unit.resources - _floor(defense * ATTACK_ATTRITION)
-                )
-                unit.tile = target
-                result = (
-                    f"{unit.id} defeated the garrison at {location} "
-                    f"(defense {int(defense)}) and took the tile "
-                    f"(now {int(unit.resources)} resources)."
-                )
-                self._record(owner, "battle", location, result, reason, unit_id=unit.id)
-                for enemy in defenders:
-                    self._broadcast(
-                        "unit_destroyed",
-                        actor=owner,
-                        victim=enemy.owner,
-                        unit=enemy.id,
-                        tile=location,
-                    )
-                    self._check_elimination(enemy.owner)
-                return result
-
-            loss = _floor(unit.resources * ATTACK_ATTRITION)
-            self._remove_unit(unit.id)
-            self._apply_unit_attrition(defenders, loss)
-            result = (
-                f"{unit.id} ({int(unit.resources)}) was destroyed attacking the "
-                f"garrison at {location} (defense {int(defense)})."
-            )
-            self._record(owner, "battle", location, result, reason, unit_id=unit.id)
-            self._broadcast(
-                "unit_destroyed", actor=defenders[0].owner, victim=owner,
-                unit=unit_id, tile=location,
-            )
-            self._check_elimination(owner)
+        unit.acted = True
+        battle = self._resolve_land_battle(owner, unit, target)
+        if battle is not None:
+            result = battle[1]
+            self._record(owner, "battle", location, result, reason, unit_id=unit_id)
             return result
 
         unit.tile = target
@@ -437,6 +459,124 @@ class World:
         self._record(owner, "move_unit", location, result, reason, unit_id=unit_id)
         return result
 
+    def _tile_label(self, tile: Tile) -> str:
+        return tile.city_name or f"({tile.q},{tile.r})"
+
+    def _resolve_land_battle(self, owner: str, unit: Unit, target: Tile):
+        """Resolve a battle when moving onto a tile with enemy units."""
+        defenders = [u for u in self.units_on(target) if u.owner != owner]
+        if not defenders:
+            return None
+        location = self._tile_label(target)
+        defense = sum(u.resources for u in defenders) + GARRISON_DEFENSE_BONUS
+        if unit.resources > defense:
+            for enemy in list(defenders):
+                self._remove_unit(enemy.id)
+            unit.resources = max(
+                0.0, unit.resources - _floor(defense * ATTACK_ATTRITION)
+            )
+            unit.tile = target
+            for enemy in defenders:
+                self._broadcast(
+                    "unit_destroyed",
+                    actor=owner,
+                    victim=enemy.owner,
+                    unit=enemy.id,
+                    tile=location,
+                )
+                self._check_elimination(enemy.owner)
+            return True, (
+                f"{unit.id} defeated the garrison at {location} (defense "
+                f"{int(defense)}) and took the tile (now {int(unit.resources)} "
+                f"resources)."
+            )
+        attacker = int(unit.resources)
+        loss = _floor(unit.resources * ATTACK_ATTRITION)
+        self._remove_unit(unit.id)
+        self._apply_unit_attrition(defenders, loss)
+        self._broadcast(
+            "unit_destroyed",
+            actor=defenders[0].owner,
+            victim=owner,
+            unit=unit.id,
+            tile=location,
+        )
+        self._check_elimination(owner)
+        return False, (
+            f"{unit.id} ({attacker}) was destroyed attacking the garrison at "
+            f"{location} (defense {int(defense)})."
+        )
+
+    @_score_tagged
+    def forced_march(
+        self, owner: str, unit_id: str, directions, reason: str = ""
+    ) -> str:
+        unit = self.units.get(unit_id)
+        if unit is None or unit.owner != owner:
+            return f"{owner} has no unit '{unit_id}'."
+        steps = [
+            part.strip().upper()
+            for part in str(directions or "").replace(";", ",").split(",")
+            if part.strip()
+        ]
+        if not steps:
+            return "Provide one or more directions, e.g. 'E,E,NE'."
+        if len(steps) > MAX_FORCED_MARCH:
+            return f"At most {MAX_FORCED_MARCH} extra tiles are allowed per turn."
+        for step in steps:
+            if step not in DIRECTIONS:
+                return (
+                    f"Unknown direction '{step}'. Use one of: "
+                    f"{', '.join(DIRECTIONS)}."
+                )
+        cost = forced_march_cost(len(steps))
+        if unit.resources - cost < MIN_FORCED_MARCH_RESERVE:
+            return (
+                f"{unit.id} has {int(unit.resources)} resources; a "
+                f"{len(steps)}-tile forced march costs {cost} and must leave "
+                f"{int(MIN_FORCED_MARCH_RESERVE)} in reserve."
+            )
+        path = []
+        cursor = unit.tile
+        for index, step in enumerate(steps):
+            dq, dr = DIRECTIONS[step]
+            nxt = self.tiles.get((cursor.q + dq, cursor.r + dr))
+            if nxt is None:
+                return f"There is no tile to the {step} of {self._tile_label(cursor)}."
+            if nxt.is_city and nxt.owner != owner:
+                return f"{unit.id} cannot enter {nxt.city_name}; use attack_city."
+            if index < len(steps) - 1 and any(
+                u.owner != owner for u in self.units_on(nxt)
+            ):
+                return (
+                    f"The forced march is blocked by enemy units at "
+                    f"{self._tile_label(nxt)}."
+                )
+            path.append(nxt)
+            cursor = nxt
+
+        unit.resources -= cost
+        unit.acted = True
+        for tile in path[:-1]:
+            unit.tile = tile
+        final = path[-1]
+        location = self._tile_label(final)
+        battle = self._resolve_land_battle(owner, unit, final)
+        if battle is None:
+            unit.tile = final
+            result = (
+                f"{unit.id} forced-marched {len(steps)} tiles to {location} "
+                f"(cost {cost}, now {int(unit.resources)} resources)."
+            )
+        else:
+            result = (
+                f"{unit.id} forced-marched into {location} (cost {cost}): "
+                f"{battle[1]}"
+            )
+        self._record(owner, "forced_march", location, result, reason, unit_id=unit_id)
+        return result
+
+    @_score_tagged
     def supply_unit(
         self, owner: str, unit_id: str, city_name: str, amount, reason: str = ""
     ) -> str:
@@ -470,6 +610,7 @@ class World:
         city.resources -= amount
         unit.resources += amount
         unit.ap -= SUPPLY_AP
+        unit.acted = True
         result = (
             f"{city_name} supplied {unit.id} with {int(amount)} resources "
             f"(unit now {int(unit.resources)}, city {int(city.resources)}, "
@@ -479,6 +620,7 @@ class World:
         return result
 
     # ---------------------------------------------------------------- combat
+    @_score_tagged
     def attack_city(
         self, owner: str, unit_id: str, city_name: str, reason: str = ""
     ) -> str:
@@ -496,6 +638,7 @@ class World:
             return f"{unit.id} is not within 1 tile of {city_name}; move closer first."
 
         unit.ap -= ATTACK_AP
+        unit.acted = True
         defender = city.owner
         garrison = [u for u in self.units_on(city) if u.owner == defender]
         defense = city.resources + sum(u.resources for u in garrison)
@@ -525,7 +668,7 @@ class World:
             self._broadcast(
                 "city_captured", actor=owner, city=city_name, previous=defender
             )
-            self._on_capital_change(city, defender, owner)
+            self._update_capital_hold(city)
             if defender is not None:
                 self._check_elimination(defender)
             return result
@@ -544,6 +687,7 @@ class World:
         return result
 
     # ------------------------------------------------------------ land actions
+    @_score_tagged
     def loot_tile(self, owner: str, unit_id: str, reason: str = "") -> str:
         unit = self.units.get(unit_id)
         if unit is None or unit.owner != owner:
@@ -559,6 +703,7 @@ class World:
         unit.resources += tile.resources
         tile.resources = 0.0
         unit.ap = max(0, unit.ap - LOOT_AP)
+        unit.acted = True
         result = (
             f"{unit.id} looted ({tile.q},{tile.r}) for {gained} resources "
             f"(unit now {int(unit.resources)}); it cannot move again this turn."
@@ -627,29 +772,66 @@ class World:
         self.eliminated.append(agent_name)
         self._broadcast("faction_eliminated", actor=agent_name)
 
-    def _on_capital_change(
-        self, city: Tile, previous_owner: Optional[str], new_owner: Optional[str]
-    ) -> None:
+    def _update_capital_hold(self, city: Tile) -> None:
+        """Track who is occupying a capital and since when."""
         original = CAPITAL_OF.get(city.city_name)
-        if original is None or previous_owner == new_owner:
+        if original is None:
             return
-        if previous_owner == original:
-            for tile in self.cities_of(previous_owner):
-                self._reduce_city(tile, 2.0)
-            for unit in self.units_of(previous_owner):
-                unit.resources = max(0.0, unit.resources - 1.0)
-            self._broadcast(
-                "capital_fallen",
-                owner=previous_owner,
-                city=city.city_name,
-                by=new_owner,
+        if city.owner == original:
+            if self.capital_hold.pop(city.city_name, None) is not None:
+                self._broadcast(
+                    "capital_retaken", owner=original, city=city.city_name
+                )
+            return
+        if city.owner is None:
+            self.capital_hold.pop(city.city_name, None)
+            return
+        self.capital_hold[city.city_name] = self.turn
+        self._broadcast(
+            "capital_captured", actor=city.owner, owner=original, city=city.city_name
+        )
+
+    def start_round(self) -> None:
+        """Evaluate capital annexations at the start of a round."""
+        if self.turn < CAPITAL_ANNEX_PROTECT_TURNS:
+            return
+        for city_name, since in list(self.capital_hold.items()):
+            city = self.cities.get(city_name)
+            original = CAPITAL_OF.get(city_name)
+            if city is None or original is None:
+                self.capital_hold.pop(city_name, None)
+                continue
+            conqueror = city.owner
+            if conqueror is None or conqueror == original:
+                self.capital_hold.pop(city_name, None)
+                continue
+            if not self.agents[original]["alive"]:
+                self.capital_hold.pop(city_name, None)
+                continue
+            if self.turn - since < CAPITAL_HOLD_ROUNDS:
+                continue
+            self.capital_hold.pop(city_name, None)
+            self._annex(conqueror, original, city)
+
+    def _annex(self, conqueror: str, original: str, capital_city: Tile) -> None:
+        transferred = []
+        for city in self.cities.values():
+            if city is capital_city or city.owner != original:
+                continue
+            city.owner = conqueror
+            city.resources = max(
+                CITY_RESOURCE_FLOOR, _floor(city.resources * ANNEX_CITY_KEEP)
             )
-        if new_owner == original:
-            for tile in self.cities_of(new_owner):
-                tile.resources += 5.0
-            for unit in self.units_of(new_owner):
-                unit.resources += 2.0
-            self._broadcast("capital_retaken", owner=new_owner, city=city.city_name)
+            transferred.append(city.city_name)
+            self._update_capital_hold(city)
+        self._broadcast(
+            "capital_annexed",
+            actor=conqueror,
+            owner=original,
+            city=capital_city.city_name,
+            cities=transferred,
+        )
+        self._check_elimination(original)
 
     # -------------------------------------------------------------- objectives
     def register_goals(self, agent_name: str, checks: dict[str, Callable]) -> None:
@@ -670,10 +852,17 @@ class World:
             total += weight * progress
         return total
 
+    def base_score(self, agent_name: str) -> float:
+        return (
+            self.resources_total(agent_name)
+            + CITY_SCORE * self.city_count(agent_name)
+            + TILE_SCORE * self.controlled_tiles(agent_name)
+        )
+
     def score(self, agent_name: str) -> float:
         if not self.agents[agent_name]["alive"]:
             return 0.0
-        return self.resources_total(agent_name) * (
+        return self.base_score(agent_name) * (
             1.0 + GOAL_SCORE_BONUS * self.goal_completion(agent_name)
         )
 
@@ -756,6 +945,15 @@ class World:
                     options.append(f"supply from {city.city_name} (up to {spare})")
         if unit.tile.is_city and unit.tile.owner == unit.owner:
             options.append("disband here")
+        affordable = 0
+        march_cost = 0
+        for k in range(1, MAX_FORCED_MARCH + 1):
+            c = forced_march_cost(k)
+            if unit.resources - c >= MIN_FORCED_MARCH_RESERVE:
+                affordable = k
+                march_cost = c
+        if affordable:
+            options.append(f"forced_march up to {affordable} tiles (cost {march_cost})")
         return "; ".join(options) if options else "none"
 
     def get_observation(self, agent_name: str) -> str:
@@ -775,11 +973,34 @@ class World:
 
         cities = self.cities_of(agent_name)
         units = self.units_of(agent_name)
+        tiles_held = self.controlled_tiles(agent_name)
+        standings = self.rankings()
+        rank = next(
+            (i + 1 for i, (n, _) in enumerate(standings) if n == agent_name),
+            len(standings),
+        )
         lines.append(
-            f"Controlled resources (used for scoring): "
-            f"{int(self.resources_total(agent_name))} "
+            "Objective: finish #1. Only the top faction wins. "
+            f"Score = (resources + {int(CITY_SCORE)}*cities + "
+            f"{int(TILE_SCORE)}*controlled tiles) * "
+            f"(1 + {GOAL_SCORE_BONUS}*goal progress)."
+        )
+        lines.append(
+            "Standings: "
+            + " · ".join(f"{n} {int(s)}" for n, s in standings)
+            + f". You are rank {rank}/{len(standings)} with "
+            f"{int(self.score(agent_name))} points."
+        )
+        lines.append(
+            f"Your score change since your last turn: "
+            f"{int(self.last_score_delta.get(agent_name, 0.0)):+d}."
+        )
+        lines.append(
+            f"Controlled resources: {int(self.resources_total(agent_name))} "
             f"({int(sum(c.resources for c in cities))} in cities, "
-            f"{int(sum(u.resources for u in units))} in units)."
+            f"{int(sum(u.resources for u in units))} in units); "
+            f"cities={len(cities)}, controlled tiles={tiles_held} -> base score "
+            f"{int(self.base_score(agent_name))}."
         )
         own_capital = hexmap.CAPITALS.get(agent_name)
         lines.append(f"Your cities ({len(cities)}):")
@@ -809,13 +1030,20 @@ class World:
         )
         lines.append(
             "Rules: cities +5/turn (your capital +10), never below 5 resources. "
-            "A unit standing on a tile controls it until it leaves. Units that "
-            "spend no action points recover 1 resource. A location defended by "
-            "one or more units gets +5 defense. Attacks: the stronger side wins; "
-            "the winner loses 30% of the loser's strength, the loser's units are "
-            "destroyed. Capturing a city loots 30% of it, halves it, and the "
-            "attacker moves in. Each unit costs 1 upkeep per turn, paid by your "
-            "cities (unpaid upkeep drains the units)."
+            "A tile is controlled while a unit with at least "
+            f"{int(OCCUPATION_MIN_RESOURCES)} resources stands on it (cities and "
+            "tiles both count toward your score). Units that take no action "
+            "recover 1 resource. A location defended by one or more units gets "
+            "+5 defense. Combat: the stronger side wins, the winner loses 30% of "
+            "the loser's strength, the loser's units are destroyed. Capturing a "
+            "city loots 30% and halves it. Each unit costs 1 upkeep per turn. "
+            f"Forced march costs {int(EXTRA_MOVE_BASE)}, "
+            f"{int(EXTRA_MOVE_BASE * EXTRA_MOVE_GROWTH)}, "
+            f"{int(EXTRA_MOVE_BASE * EXTRA_MOVE_GROWTH ** 2)}, ... resources for "
+            f"extra tiles (max {MAX_FORCED_MARCH}). Enemy capitals: capture and "
+            f"hold one full round (not before turn "
+            f"{CAPITAL_ANNEX_PROTECT_TURNS + 1}) to annex all of that faction's "
+            "cities; its units survive as guerrillas."
         )
 
         lines.append("All cities on the board:")
@@ -871,6 +1099,7 @@ class World:
                     "resources": int(tile.resources),
                     "capital": CAPITAL_OF.get(tile.city_name),
                     "defense": int(self.city_defense(tile)),
+                    "contested": tile.city_name in self.capital_hold,
                 }
                 for tile in sorted(self.cities.values(), key=lambda t: t.city_name)
             ],
@@ -891,10 +1120,14 @@ class World:
                     "home": info.get("home"),
                     "resources_total": int(self.resources_total(name)),
                     "cities": [c.city_name for c in self.cities_of(name)],
+                    "city_count": self.city_count(name),
+                    "tiles": self.controlled_tiles(name),
                     "unit_count": self.unit_count(name),
+                    "score": round(self.score(name), 1),
                 }
                 for name, info in self.agents.items()
             },
+            "annex_protected": self.turn < CAPITAL_ANNEX_PROTECT_TURNS,
             "relations": {
                 f"{a}|{b}": int(value) for (a, b), value in self.relations.items()
             },

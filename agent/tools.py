@@ -65,6 +65,22 @@ def make_tools(world, agent_name):
         return world.loot_tile(agent_name, unit_id, reason)
 
     @tool
+    def forced_march(unit_id: str, directions: str, reason: str = "") -> str:
+        """Burn a unit's own resources to move extra tiles this turn (no action points).
+
+        The first extra tile costs 4 resources, then 8, 16, 32, 64 (max 5
+        tiles). The unit must keep at least 1 resource. You may turn between
+        steps. You cannot pass through enemy units or enter a city you do not
+        control. A unit that forced-marches counts as having acted.
+
+        Args:
+            unit_id: Id of your unit (for example "U1").
+            directions: Comma-separated directions, for example "E,E,NE".
+            reason: Why you are burning resources to move.
+        """
+        return world.forced_march(agent_name, unit_id, directions, reason)
+
+    @tool
     def merge_units(unit_id: str, other_id: str, reason: str = "") -> str:
         """Merge two of your units on the same tile into one. Costs 0 action points.
 
@@ -119,6 +135,7 @@ def make_tools(world, agent_name):
         move_unit,
         attack_city,
         loot_tile,
+        forced_march,
         merge_units,
         supply_unit,
         disband_unit,

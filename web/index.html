@@ -201,6 +201,24 @@
   .hexinfo b { color: var(--text); }
   .map-tools { display: flex; gap: 8px; align-items: center; margin-top: 8px; }
   .map-tools .hint { flex: 1; }
+  .rank-list { display: flex; flex-direction: column; gap: 6px; }
+  .rank-row {
+    display: grid;
+    grid-template-columns: 22px 1fr auto;
+    gap: 8px;
+    align-items: center;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 6px 10px;
+  }
+  .rank-row.leader { border-color: #e5c07b; }
+  .rank-row.eliminated { opacity: 0.45; }
+  .rank-row .rk { color: var(--muted); font-weight: 700; }
+  .rank-row .nm { font-weight: 700; display: flex; align-items: center; gap: 6px; }
+  .rank-row .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+  .rank-row .meta { color: var(--muted); font-size: 11px; font-weight: 400; }
+  .rank-row .sc { font-variant-numeric: tabular-nums; font-weight: 700; }
   body.spectate .setup-panel { display: none; }
   body.spectate main {
     grid-template-columns: 1fr 440px;
@@ -321,6 +339,10 @@
       <div class="keywarn" id="keywarn"></div>
     </div>
 
+    <div class="panel ranking-panel" style="margin-top:16px">
+      <h2 data-i18n="standings">Standings</h2>
+      <div class="rank-list" id="rankings"></div>
+    </div>
     <div class="panel map-panel" style="margin-top:16px">
       <h2 data-i18n="world_map">World Map</h2>
       <svg class="hexmap" id="hexmap" role="img"></svg>
@@ -385,10 +407,14 @@ const I18N = {
     act_move_unit: "Move",
     act_attack_city: "Attack",
     act_loot_tile: "Loot",
+    act_forced_march: "Forced march",
     act_merge_units: "Merge",
     act_supply_unit: "Supply",
     act_disband_unit: "Disband",
     act_end_turn: "End turn",
+    standings: "Standings",
+    tiles: "tiles",
+    contested: "annex pending",
     capital: "Capital",
     spectator: "Spectator",
     exit_spectate: "Exit",
@@ -462,10 +488,14 @@ const I18N = {
     act_move_unit: "行军",
     act_attack_city: "攻城",
     act_loot_tile: "掠夺",
+    act_forced_march: "强行军",
     act_merge_units: "合并单位",
     act_supply_unit: "补给",
     act_disband_unit: "解散单位",
     act_end_turn: "结束回合",
+    standings: "排名",
+    tiles: "领地",
+    contested: "待吞并",
     capital: "首都",
     spectator: "观战模式",
     exit_spectate: "退出观战",
@@ -950,6 +980,9 @@ function showHexInfo(q, r) {
   const cap = cityMeta && cityMeta.capital
     ? ` · <b>${t("capital")}</b> (${cityMeta.capital})`
     : "";
+  const contested = cityMeta && cityMeta.contested
+    ? ` · <b style="color:#e5c07b">${t("contested")}</b>`
+    : "";
   const owner = tile.owner ? `<b style="color:${colorFor(tile.owner)}">${tile.owner}</b>` : t("neutral");
   const defense = cityMeta && typeof cityMeta.defense === "number"
     ? `<div>${t("defense")}: ${cityMeta.defense}</div>`
@@ -963,7 +996,7 @@ function showHexInfo(q, r) {
         .join("<br>")
     : "-";
   box.innerHTML =
-    `<div><b>${name}</b> · ${terrain}${cap}</div>` +
+    `<div><b>${name}</b> · ${terrain}${cap}${contested}</div>` +
     `<div>${t("label_owner")}: ${owner}</div>` +
     `<div>${t("label_resources")}: ${tile.resources}</div>` +
     defense +
@@ -1060,6 +1093,34 @@ function renderHexMap(world) {
     `</g>`;
 }
 
+function renderRankings(world) {
+  const box = el("rankings");
+  if (!box) return;
+  const scores = world.scores || {};
+  const agents = world.agents || {};
+  const rows = Object.keys(agents)
+    .map((name) => ({
+      name,
+      score: scores[name] || 0,
+      cities: (agents[name].cities || []).length,
+      tiles: agents[name].tiles || 0,
+      alive: agents[name].alive,
+    }))
+    .sort((a, b) => b.score - a.score);
+  box.innerHTML = rows
+    .map((r, i) => {
+      const color = colorFor(r.name);
+      const cls = "rank-row" + (i === 0 ? " leader" : "") + (r.alive === false ? " eliminated" : "");
+      return (
+        `<div class="${cls}"><span class="rk">${i + 1}</span>` +
+        `<span class="nm" style="color:${color}"><span class="dot" style="background:${color}"></span>${r.name} ` +
+        `<span class="meta">${r.cities} ${t("cities")} · ${r.tiles} ${t("tiles")}</span></span>` +
+        `<span class="sc">${Math.round(r.score)}</span></div>`
+      );
+    })
+    .join("");
+}
+
 function renderNations(nations, world) {
   lastNations = nations;
   if (world) lastWorld = world;
@@ -1130,6 +1191,7 @@ function updateWorld(world) {
     }
   });
   renderHexMap(world);
+  renderRankings(world);
   const rel = world.relations || {};
   const keys = Object.keys(rel);
   el("relations").innerHTML = keys.length
