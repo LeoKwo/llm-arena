@@ -7,7 +7,7 @@ from agent.goals import format_goals
 from agent.prompt import get_prompt, language_instruction
 from agent.tools import make_tools
 
-MAX_LLM_CALLS = 20
+MAX_LLM_CALLS = 24
 REFLECT_EVERY = 3
 REFLECT_MIN_MEMORIES = 6
 
@@ -73,12 +73,17 @@ def build_agent_graph(
     def reflect_node(state):
         turn = state.get("turn", 0)
         recent = memory.recent(8)
+        max_turns = getattr(world, "max_turns", None)
+        time_note = ""
+        if max_turns:
+            remaining = max(0, max_turns - (turn + 1))
+            time_note = f" Only {remaining} turns remain after this one."
         prompt = (
             f"You are {name}. Persona: {persona}\n"
             f"Goals:\n{format_goals(goals)}\n\n"
             f"Recent memories:\n" + "\n".join(recent) + "\n\n"
             "Write a concise strategic reflection (3-4 sentences) about your "
-            "position, mistakes, and what you should do next." + lang_suffix
+            "position, mistakes, and what you should do next." + time_note + lang_suffix
         )
         reflection = stream_text(prompt, "reflect", turn)
         memory.add_reflection(reflection)

@@ -78,6 +78,7 @@ def run(
     try:
         embeddings = build_embeddings()
         world = build_default_world()
+        world.max_turns = max_turns
         agents = build_all_agents(
             world,
             embeddings,
@@ -103,7 +104,12 @@ def run(
             world.turn = turn
             emit({"type": "turn_start", "turn": turn})
 
-            for name, bundle in agents.items():
+            order = list(agents.keys())
+            if order:
+                offset = turn % len(order)
+                order = order[offset:] + order[:offset]
+            for name in order:
+                bundle = agents[name]
                 if not world.agents[name]["alive"]:
                     continue
                 if stop_requested():
@@ -146,6 +152,7 @@ def run(
                             "reflections": reflections[previous_reflections:],
                         }
                     )
+                world.end_faction_turn(name)
                 for note in world.take_broadcasts():
                     emit({"type": "broadcast", "event": note})
                 emit({"type": "world_state", "world": world.snapshot()})

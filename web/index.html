@@ -291,7 +291,7 @@
 <body>
 <header>
   <h1>LLM Arena</h1>
-  <div class="turn-badge"><span data-i18n="turn">Turn</span> <span id="turn">-</span></div>
+  <div class="turn-badge"><span data-i18n="turn">Turn</span> <span id="turn">-</span><span id="turnmax"></span></div>
   <div id="status" class="status" data-i18n="status_idle">idle</div>
   <div class="spacer"></div>
   <button id="spectate" class="btn-lang" type="button" data-i18n="spectator">Spectator</button>
@@ -384,8 +384,9 @@ const I18N = {
     act_spawn_unit: "Spawn",
     act_move_unit: "Move",
     act_attack_city: "Attack",
-    act_claim_tile: "Claim",
-    act_garrison: "Garrison",
+    act_loot_tile: "Loot",
+    act_merge_units: "Merge",
+    act_supply_unit: "Supply",
     act_disband_unit: "Disband",
     act_end_turn: "End turn",
     capital: "Capital",
@@ -401,6 +402,7 @@ const I18N = {
     terrain_city: "City",
     terrain_land: "Land",
     neutral: "Neutral",
+    defense: "Defense",
     status_idle: "idle",
     status_running: "running",
     status_connecting: "connecting...",
@@ -459,8 +461,9 @@ const I18N = {
     act_spawn_unit: "生成单位",
     act_move_unit: "行军",
     act_attack_city: "攻城",
-    act_claim_tile: "占领空地",
-    act_garrison: "驻扎",
+    act_loot_tile: "掠夺",
+    act_merge_units: "合并单位",
+    act_supply_unit: "补给",
     act_disband_unit: "解散单位",
     act_end_turn: "结束回合",
     capital: "首都",
@@ -476,6 +479,7 @@ const I18N = {
     terrain_city: "城市",
     terrain_land: "陆地",
     neutral: "中立",
+    defense: "防御",
     status_idle: "空闲",
     status_running: "运行中",
     status_connecting: "连接中…",
@@ -947,6 +951,9 @@ function showHexInfo(q, r) {
     ? ` · <b>${t("capital")}</b> (${cityMeta.capital})`
     : "";
   const owner = tile.owner ? `<b style="color:${colorFor(tile.owner)}">${tile.owner}</b>` : t("neutral");
+  const defense = cityMeta && typeof cityMeta.defense === "number"
+    ? `<div>${t("defense")}: ${cityMeta.defense}</div>`
+    : "";
   const unitText = units.length
     ? units
         .map(
@@ -959,6 +966,7 @@ function showHexInfo(q, r) {
     `<div><b>${name}</b> · ${terrain}${cap}</div>` +
     `<div>${t("label_owner")}: ${owner}</div>` +
     `<div>${t("label_resources")}: ${tile.resources}</div>` +
+    defense +
     `<div>${t("label_units")}:<br>${unitText}</div>`;
   const svg = el("hexmap");
   svg.querySelectorAll("polygon.sel").forEach((p) => p.classList.remove("sel"));
@@ -1095,7 +1103,9 @@ function renderNations(nations, world) {
 
 function updateWorld(world) {
   lastWorld = world;
-  el("turn").textContent = world.turn;
+  el("turn").textContent = (world.turn || 0) + 1;
+  const turnmax = el("turnmax");
+  if (turnmax) turnmax.textContent = world.max_turns ? " / " + world.max_turns : "";
   Object.entries(world.agents || {}).forEach(([name, a]) => {
     const card = nationEls[name];
     if (!card) return;
@@ -1145,8 +1155,8 @@ function handle(event) {
       break;
     case "turn_start":
       clearThinking();
-      log(t("turn_n", event.turn), "turn");
-      el("turn").textContent = event.turn;
+      log(t("turn_n", event.turn + 1), "turn");
+      el("turn").textContent = event.turn + 1;
       break;
     case "agent_thinking": {
       const card = nationEls[event.agent];
