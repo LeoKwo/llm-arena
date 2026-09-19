@@ -1,13 +1,11 @@
-from langchain_ollama.embeddings import OllamaEmbeddings
-
 from agent.init_agents import (
     DEFAULT_LOCAL_MODELS,
     NATIONS,
     build_all_agents,
 )
+from agent.llm_factory import build_embeddings
 from world.environment import build_default_world
 
-EMBED_MODEL = "qwen3-embedding:0.6b"
 MAX_TURNS = 20
 
 
@@ -71,7 +69,7 @@ def run(max_turns=MAX_TURNS, verbose=True, on_event=None, model_config=None, sho
         return bool(should_stop and should_stop())
 
     try:
-        embeddings = OllamaEmbeddings(model=EMBED_MODEL)
+        embeddings = build_embeddings()
         world = build_default_world()
         agents = build_all_agents(
             world,

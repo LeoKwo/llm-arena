@@ -32,7 +32,50 @@ python3.11 -m venv myenv
 ./myenv/bin/pip install -r requirements.txt
 ```
 
-`requirements.txt` 主要包含：`langchain` / `langchain-core` / `langchain-ollama` / `langchain-openai` / `langgraph` / `faiss-cpu` / `fastapi` / `uvicorn` / `ollama`。
+`requirements.txt` 主要包含：`langchain` / `langchain-core` / `langchain-ollama` / `langchain-openai` / `langgraph` / `faiss-cpu` / `fastapi` / `uvicorn` / `ollama` / `python-dotenv`。
+
+## .env 配置
+
+启动时会用 `python-dotenv` 自动读取项目根目录的 `.env`（不存在则忽略；真实环境变量优先）。复制模板即可：
+
+```bash
+cp .env.example .env
+```
+
+`.env` 内容：
+
+```ini
+# ---- API Key ----
+DEEPSEEK_API_KEY=
+ZHIPUAI_API_KEY=
+DASHSCOPE_API_KEY=
+MOONSHOT_API_KEY=
+
+# ---- 对话模型：全局默认 + 每国覆盖 ----
+# provider: ollama | zhipu | deepseek | qwen | kimi
+DEFAULT_PROVIDER=ollama
+DEFAULT_MODEL=qwen3.5:latest
+
+GERMANY_PROVIDER=
+GERMANY_MODEL=
+FRANCE_PROVIDER=
+FRANCE_MODEL=
+UK_PROVIDER=
+UK_MODEL=
+
+# ---- Embedding（用于智能体记忆 / FAISS）----
+EMBEDDING_PROVIDER=zhipu
+EMBEDDING_MODEL=embedding-3
+EMBEDDING_BASE_URL=
+EMBEDDING_API_KEY=
+```
+
+> DeepSeek 目前**没有 embedding 接口**，所以 embedding 默认用智谱 GLM 的 `embedding-3`（需要 `ZHIPUAI_API_KEY`）。想免费本地运行可设 `EMBEDDING_PROVIDER=ollama`（默认模型 `qwen3-embedding:0.6b`）。
+
+解析优先级：
+
+- **模型 provider/model**：Web UI 手动选择 > `.env`（每国覆盖 > 全局默认 > 本地 Ollama）。
+- **API Key**：Web UI 输入 > 系统环境变量 > `.env`（`load_dotenv(override=False)`，系统环境变量不会被 `.env` 覆盖）。
 
 ## Ollama 准备（本地模型）
 
@@ -52,12 +95,20 @@ osascript -e 'quit app "Ollama"'; sleep 3; open -a Ollama
 
 ## API 提供商配置（可选）
 
-在 Web UI 打开 “Use API models” 后，可为每个国家选择提供商。密钥通过环境变量提供：
+在 Web UI 打开 “Use API models” 后，可为每个国家选择提供商。
+
+密钥有三种提供方式（优先级从高到低）：
+
+1. **直接在 Web UI 的 “API Keys” 区域输入**：每个云端提供商一个输入框，点 **Start** 时会提交给本地服务端（仅保存在内存中，不落盘）。
+2. **系统环境变量**。
+3. **`.env` 文件**（见上节）。
+
+提供商的密钥环境变量名：
 
 | 提供商 | 环境变量（任选其一） | 默认模型 |
 | --- | --- | --- |
 | Zhipu (GLM) | `ZHIPUAI_API_KEY` / `ZHIPU_API_KEY` / `GLM_API_KEY` | `glm-4-plus` |
-| DeepSeek | `DEEPSEEK_API_KEY` | `deepseek-chat` |
+| DeepSeek | `DEEPSEEK_API_KEY` | `deepseek-v4-flash` |
 | Qwen (DashScope) | `DASHSCOPE_API_KEY` / `QWEN_API_KEY` | `qwen-plus` |
 | Kimi (Moonshot) | `MOONSHOT_API_KEY` / `KIMI_API_KEY` | `moonshot-v1-8k` |
 
@@ -91,8 +142,8 @@ curl http://127.0.0.1:8000/api/stop
 ## Web UI 使用
 
 1. 顶部设置 `Max turns`，点击 **Start**。
-2. **Use API models** 关闭时使用本地 Ollama；打开后每个国家可分别选择 Zhipu / DeepSeek / Qwen / Kimi，可全选相同或各选不同。
-3. 若所选提供商的密钥未配置，页面会提示缺失的环境变量，服务端在启动模拟时也会返回错误。
+2. **Use API models** 关闭时使用本地 Ollama；打开后每个国家可分别选择 Zhipu / DeepSeek / Qwen / Kimi，可全选相同或各选不同。页面初次加载时会按 `.env` 的默认/每国配置预选。
+3. 在 “API Keys” 区域为所选提供商填入密钥（留空则回退到系统环境变量 / `.env`）；都缺失时页面会提示，服务端在启动模拟时也会返回错误。
 4. **Interrupt** 按钮可请求中断：当前正在生成的智能体完成后停止，界面显示 `interrupted`。
 5. 右侧 Live Feed 实时显示行动、结果、Plan 与 Reflection；左侧显示国家面板、世界地图、关系矩阵与实时得分。
 6. 模型输出（planning / reflecting / acting）以可折叠面板实时流式显示：生成中自动展开并逐 token 刷新，结束后自动收起，点击标题可随时展开查看完整内容。
@@ -117,11 +168,15 @@ agent_memory/memory_store.py # FAISS 记忆存储
 web/
   server.py                  # FastAPI + SSE 服务
   index.html                 # 实时对战前端
+.env.example                 # .env 配置模板（.env 已被 .gitignore 忽略）
 requirements.txt
 ```
 
 ## 配置说明
 
+- `.env`：API Key、对话模型（全局默认 + 每国覆盖）、embedding 模型；由 `python-dotenv` 自动加载。
+- `DEFAULT_PROVIDER` / `DEFAULT_MODEL`：默认对话模型；`GERMANY_*` / `FRANCE_*` / `UK_*` 可逐国覆盖。
+- `EMBEDDING_PROVIDER` / `EMBEDDING_MODEL`：智能体记忆用的 embedding，默认 `zhipu` / `embedding-3`。
 - `MAX_TURNS`：默认 20，可在 Web UI 或 `run(max_turns=...)` 覆盖。
 - `REFLECT_EVERY`：默认每 3 回合反思一次（`agent_graph/graph.py`）。
 - 评分权重：`TERRITORY_WEIGHT=20`、`GOAL_WEIGHT=100`（`world/environment.py`）。

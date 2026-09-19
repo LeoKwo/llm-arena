@@ -1,3 +1,5 @@
+import os
+
 from agent.persona import get_persona
 from agent.goals import get_goals
 from agent.llm_factory import PROVIDERS, build_chat_model
@@ -17,11 +19,54 @@ DEFAULT_API_PROVIDERS = {
 }
 
 
+# Prefixes used for per-nation overrides in .env, e.g. GERMANY_PROVIDER.
+ENV_NATION_PREFIX = {
+    "Germany": "GERMANY",
+    "France": "FRANCE",
+    "United Kingdom": "UK",
+}
+
+
+def _env_value(*names):
+    for name in names:
+        value = os.environ.get(name)
+        if value and value.strip():
+            return value.strip()
+    return None
+
+
 def default_model_config():
-    return {
-        name: {"provider": "ollama", "model": DEFAULT_LOCAL_MODELS[name]}
-        for name in DEFAULT_LOCAL_MODELS
-    }
+    """Default chat model per nation, read from .env.
+
+    ``DEFAULT_PROVIDER`` / ``DEFAULT_MODEL`` set the baseline; per-nation
+    ``<GERMANY|FRANCE|UK>_PROVIDER`` / ``_MODEL`` override it. Missing values
+    fall back to the local Ollama defaults.
+    """
+    default_provider = _env_value("DEFAULT_PROVIDER") or "ollama"
+    default_model = _env_value("DEFAULT_MODEL")
+    config = {}
+    for name in DEFAULT_LOCAL_MODELS:
+        prefix = ENV_NATION_PREFIX[name]
+        nation_provider = _env_value(f"{prefix}_PROVIDER")
+        nation_model = _env_value(f"{prefix}_MODEL")
+        provider = nation_provider or default_provider
+
+        if nation_model:
+            model = nation_model
+        elif nation_provider and nation_provider != default_provider:
+            # Provider overridden without a model: don't inherit DEFAULT_MODEL,
+            # which belongs to the global provider.
+            model = None
+        else:
+            model = default_model
+
+        if not model:
+            if provider == "ollama":
+                model = DEFAULT_LOCAL_MODELS[name]
+            else:
+                model = PROVIDERS.get(provider, {}).get("default_model")
+        config[name] = {"provider": provider, "model": model}
+    return config
 
 
 def _clamp(value, low=0.0, high=1.0):
@@ -118,7 +163,9 @@ def build_all_agents(world, embeddings, model_config=None, verbose=False, on_eve
         }
         provider = spec.get("provider", "ollama")
         model = spec.get("model") or PROVIDERS.get(provider, {}).get("default_model")
-        llm = build_chat_model(provider=provider, model=model)
+        llm = build_chat_model(
+            provider=provider, model=model, api_key=spec.get("api_key")
+        )
         memory = FAISSMemory(embeddings=embeddings, max_results=5)
         world.register_goals(name, config["checks"](world, name))
         graph = build_agent_graph(

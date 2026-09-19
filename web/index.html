@@ -104,6 +104,32 @@
     padding: 6px 8px;
   }
   .keywarn { color: var(--danger); font-size: 12px; margin-top: 8px; min-height: 16px; }
+  .keys { margin-top: 12px; display: grid; gap: 8px; }
+  .keys > summary { cursor: pointer; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 1px; }
+  .key-row { display: grid; grid-template-columns: 120px 1fr auto; align-items: center; gap: 8px; }
+  .key-row > label { font-size: 12px; color: var(--muted); }
+  .key-input { display: flex; gap: 6px; }
+  .key-input input {
+    flex: 1;
+    background: #0b0e13;
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 6px 8px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px;
+  }
+  .btn-ghost {
+    background: var(--panel-2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    padding: 6px 10px;
+    font-weight: 500;
+    font-size: 12px;
+  }
+  .key-badge { font-size: 11px; color: var(--muted); min-width: 52px; text-align: right; }
+  .key-badge.ok { color: var(--ok); }
+  .key-badge.miss { color: var(--danger); }
   .nations { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: 12px; }
   .nation {
     background: var(--panel-2);
@@ -226,6 +252,11 @@
         <span class="hint" id="modeltogglehint">Off = local Ollama models. On = cloud API providers.</span>
       </div>
       <div class="model-grid" id="modelgrid"></div>
+      <details class="keys" id="keysbox" open>
+        <summary>API Keys</summary>
+        <div class="keys" id="apikeys"></div>
+        <span class="hint">Keys are kept in this local server's memory and never written to disk.</span>
+      </details>
       <div class="keywarn" id="keywarn"></div>
     </div>
 
@@ -254,6 +285,7 @@ const SLUGS = [["germany", "Germany"], ["france", "France"], ["uk", "United King
 let providerInfo = null;
 let localDefaults = {};
 let apiDefaults = {};
+let envDefaults = {};
 let source = null;
 const nationEls = {};
 const liveThink = {};
@@ -363,11 +395,90 @@ async function loadProviders() {
     providerInfo = data.providers;
     localDefaults = data.defaults.local || {};
     apiDefaults = data.defaults.api || {};
+    envDefaults = data.defaults.env || {};
   } catch (err) {
     providerInfo = { ollama: { label: "Local (Ollama)", configured: true } };
   }
   buildModelGrid();
+  buildApiKeyFields();
+  applyEnvDefaults();
   updateKeyWarning();
+}
+
+function applyEnvDefaults() {
+  if (!providerInfo || !envDefaults) return;
+  SLUGS.forEach(([slug, nation]) => {
+    const conf = envDefaults[nation];
+    const select = el("sel-" + slug);
+    if (!select || !conf || !conf.provider) return;
+    if (providerInfo[conf.provider]) select.value = conf.provider;
+  });
+}
+
+function buildApiKeyFields() {
+  const box = el("apikeys");
+  if (!box) return;
+  box.innerHTML = "";
+  if (!providerInfo) return;
+  Object.entries(providerInfo)
+    .filter(([key]) => key !== "ollama")
+    .forEach(([key, info]) => {
+      const row = document.createElement("div");
+      row.className = "key-row";
+      row.innerHTML =
+        `<label>${info.label}</label>` +
+        `<div class="key-input">` +
+        `<input type="password" data-provider="${key}" id="key-${key}" autocomplete="off" spellcheck="false" ` +
+        `placeholder="${info.configured ? "configured via env — leave blank to use it" : "paste API key"}">` +
+        `<button type="button" class="btn-ghost" data-toggle="${key}">Show</button>` +
+        `</div>` +
+        `<span class="key-badge" id="badge-${key}"></span>`;
+      box.appendChild(row);
+      const input = row.querySelector("input");
+      input.addEventListener("input", () => { updateKeyBadges(); updateKeyWarning(); });
+      row.querySelector("button").addEventListener("click", () => {
+        const showing = input.type === "text";
+        input.type = showing ? "password" : "text";
+        row.querySelector("button").textContent = showing ? "Show" : "Hide";
+      });
+    });
+  updateKeyBadges();
+}
+
+function hasUiKey(provider) {
+  const input = el("key-" + provider);
+  return !!(input && input.value.trim());
+}
+
+function apiKeyReady(provider) {
+  if (hasUiKey(provider)) return true;
+  return !!(providerInfo && providerInfo[provider] && providerInfo[provider].configured);
+}
+
+function updateKeyBadges() {
+  if (!providerInfo) return;
+  Object.keys(providerInfo).forEach((provider) => {
+    if (provider === "ollama") return;
+    const badge = el("badge-" + provider);
+    if (!badge) return;
+    let text = "missing";
+    let cls = "key-badge miss";
+    if (hasUiKey(provider)) { text = "in UI"; cls = "key-badge ok"; }
+    else if (providerInfo[provider].configured) { text = "env"; cls = "key-badge ok"; }
+    badge.textContent = text;
+    badge.className = cls;
+  });
+}
+
+function collectApiKeys() {
+  const keys = {};
+  if (!providerInfo) return keys;
+  Object.keys(providerInfo).forEach((provider) => {
+    if (provider === "ollama") return;
+    const input = el("key-" + provider);
+    keys[provider] = input ? input.value.trim() : "";
+  });
+  return keys;
 }
 
 function optionList(selected) {
@@ -406,22 +517,37 @@ function applyToggle() {
     : "Off = local Ollama models. On = cloud API providers.";
 }
 
+function refreshOptionLabels() {
+  if (!providerInfo) return;
+  SLUGS.forEach(([slug]) => {
+    const select = el("sel-" + slug);
+    if (!select) return;
+    Array.from(select.options).forEach((opt) => {
+      const info = providerInfo[opt.value];
+      if (!info) return;
+      opt.textContent = info.label + (apiKeyReady(opt.value) ? "" : " — key missing");
+    });
+  });
+}
+
 function updateKeyWarning() {
   if (!providerInfo) return;
+  refreshOptionLabels();
   const missing = [];
   const seen = new Set();
   SLUGS.forEach(([slug, nation]) => {
     const select = el("sel-" + slug);
     if (!select) return;
     const key = select.value;
-    const info = providerInfo[key];
-    if (info && info.configured === false && !seen.has(key)) {
-      seen.add(key);
-      missing.push(`${info.label} (${nation})`);
+    if (key === "ollama" || seen.has(key)) return;
+    seen.add(key);
+    if (!apiKeyReady(key)) {
+      const info = providerInfo[key];
+      missing.push(`${(info && info.label) || key} (${nation})`);
     }
   });
   el("keywarn").textContent = missing.length
-    ? "Missing API key for: " + missing.join(", ") + ". Set the env vars before running."
+    ? "Missing API key for: " + missing.join(", ") + ". Paste it above or set the env var before running."
     : "";
 }
 
@@ -573,7 +699,7 @@ function handle(event) {
   }
 }
 
-function start() {
+async function start() {
   if (source) return;
   const maxTurns = parseInt(el("maxturns").value || "10", 10);
   const params = new URLSearchParams({ max_turns: maxTurns });
@@ -584,6 +710,26 @@ function start() {
   clearLog();
   setStatus("connecting...", "running");
   setRunning(true);
+
+  const keys = collectApiKeys();
+  if (Object.keys(keys).length) {
+    try {
+      const res = await fetch("/api/keys", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ keys }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      if (data.providers) { providerInfo = data.providers; updateKeyBadges(); updateKeyWarning(); }
+    } catch (err) {
+      setStatus("error", "error");
+      log(`Could not save API keys: ${err.message}`, "error");
+      setRunning(false);
+      return;
+    }
+  }
+
   source = new EventSource(`/api/run?${params.toString()}`);
   source.onmessage = (e) => {
     if (!e.data) return;
