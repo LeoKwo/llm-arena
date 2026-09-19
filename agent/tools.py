@@ -23,10 +23,13 @@ def make_tools(world, agent_name):
         """Move one of your units to an adjacent hex tile. Costs 1 action point.
 
         You cannot enter a city you do not control (use attack_city instead).
+        If the destination holds enemy units a battle happens: the side with
+        more resources wins and loses nothing, while the loser's unit is
+        destroyed with all of its resources.
 
         Args:
             unit_id: Id of your unit (for example "U1").
-            direction: One of N, NE, SE, S, SW, NW.
+            direction: One of E, SE, SW, W, NW, NE.
             reason: Why you are moving.
         """
         return world.move_unit(agent_name, unit_id, direction, reason)
@@ -72,6 +75,18 @@ def make_tools(world, agent_name):
         return world.garrison(agent_name, unit_id, reason)
 
     @tool
+    def disband_unit(unit_id: str, reason: str = "") -> str:
+        """Disband one of your units while it stands on a city you control.
+
+        The unit's resources are returned to that city plus a 5 resource bonus.
+
+        Args:
+            unit_id: Id of your unit (for example "U1").
+            reason: Why you are disbanding this unit.
+        """
+        return world.disband_unit(agent_name, unit_id, reason)
+
+    @tool
     def end_turn(reason: str = "") -> str:
         """End your turn. Call this when you have finished all your actions.
 
@@ -86,5 +101,6 @@ def make_tools(world, agent_name):
         attack_city,
         claim_tile,
         garrison,
+        disband_unit,
         end_turn,
     ]

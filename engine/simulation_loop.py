@@ -146,6 +146,8 @@ def run(
                             "reflections": reflections[previous_reflections:],
                         }
                     )
+                for note in world.take_broadcasts():
+                    emit({"type": "broadcast", "event": note})
                 emit({"type": "world_state", "world": world.snapshot()})
 
             world.advance()

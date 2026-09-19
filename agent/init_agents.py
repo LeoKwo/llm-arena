@@ -10,12 +10,14 @@ DEFAULT_LOCAL_MODELS = {
     "Germany": "qwen3.5:latest",
     "France": "qwen3.5:latest",
     "United Kingdom": "qwen3.5:latest",
+    "Soviet Union": "qwen3.5:latest",
 }
 
 DEFAULT_API_PROVIDERS = {
     "Germany": "zhipu",
     "France": "deepseek",
     "United Kingdom": "qwen",
+    "Soviet Union": "deepseek",
 }
 
 
@@ -24,6 +26,7 @@ ENV_NATION_PREFIX = {
     "Germany": "GERMANY",
     "France": "FRANCE",
     "United Kingdom": "UK",
+    "Soviet Union": "USSR",
 }
 
 
@@ -106,6 +109,16 @@ def _uk_checks(world, name):
     }
 
 
+def _ussr_checks(world, name):
+    return {
+        "primary": lambda w, n: _clamp(w.city_count("Soviet Union") / 6.0),
+        "secondary": lambda w, n: 0.5
+        * (1.0 if w.cities["Moscow"].owner == "Soviet Union" else 0.0)
+        + 0.5 * (1.0 if w.cities["Leningrad"].owner == "Soviet Union" else 0.0),
+        "tertiary": lambda w, n: _clamp(w.resources_total("Soviet Union") / 300.0),
+    }
+
+
 NATIONS = {
     "Germany": {
         "persona": get_persona(
@@ -145,6 +158,19 @@ NATIONS = {
             tertiary="Keep London secure",
         ),
         "checks": _uk_checks,
+    },
+    "Soviet Union": {
+        "persona": get_persona(
+            brief_description="Vast collectivist superpower",
+            strength="Enormous manpower and resources",
+            weakness="Slow to mobilise across a huge frontier",
+        ),
+        "goals": get_goals(
+            primary="Spread Soviet control across Eastern Europe",
+            secondary="Keep Moscow and Leningrad secure",
+            tertiary="Build a strong economy",
+        ),
+        "checks": _ussr_checks,
     },
 }
 

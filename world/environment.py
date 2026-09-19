@@ -12,7 +12,15 @@ GOAL_WEIGHT = 100.0
 GOAL_WEIGHTS = {"primary": 0.5, "secondary": 0.3, "tertiary": 0.2}
 
 CITY_INCOME = 5.0
+CAPITAL_INCOME = 10.0
+DISBAND_BONUS = 5.0
 GARRISON_GAIN = 2.0
+CAPITAL_LOSS_CITY_PENALTY = 2.0
+CAPITAL_LOSS_UNIT_PENALTY = 1.0
+CAPITAL_REGAIN_CITY_BONUS = 5.0
+CAPITAL_REGAIN_UNIT_BONUS = 2.0
+
+CAPITAL_OF = {capital: nation for nation, capital in hexmap.CAPITALS.items()}
 MOVE_AP = 1
 ATTACK_AP = 1
 CLAIM_AP = 2
@@ -108,6 +116,15 @@ class World:
         self.goal_checks: dict[str, dict[str, Callable]] = {}
         self.eliminated: list[str] = []
         self.spawns_this_turn: dict[str, int] = {name: 0 for name in agents}
+        self.broadcasts: list[dict] = []
+
+    def _broadcast(self, kind: str, **data) -> None:
+        self.broadcasts.append({"kind": kind, **data})
+
+    def take_broadcasts(self) -> list[dict]:
+        items = self.broadcasts
+        self.broadcasts = []
+        return items
 
     # ------------------------------------------------------------------ lookup
     def living_agents(self) -> list[str]:
@@ -168,8 +185,11 @@ class World:
     def begin_turn(self, agent_name: str) -> None:
         if not self.agents[agent_name]["alive"]:
             return
+        capital = hexmap.CAPITALS.get(agent_name)
         for tile in self.cities_of(agent_name):
-            tile.resources += CITY_INCOME
+            tile.resources += (
+                CAPITAL_INCOME if tile.city_name == capital else CITY_INCOME
+            )
         for unit in self.units_of(agent_name):
             unit.ap = MAX_AP
         self.spawns_this_turn[agent_name] = 0
@@ -245,15 +265,85 @@ class World:
                 f"cities can only be taken with attack_city."
             )
         origin = unit.tile
-        unit.tile = target
-        unit.ap -= MOVE_AP
         location = target.city_name or f"({target.q},{target.r})"
+        enemies = [
+            other
+            for other in self.units.values()
+            if other.owner != owner and other.tile is target
+        ]
+        unit.ap -= MOVE_AP
+
+        if enemies:
+            # Unit vs unit: the side with more resources wins and loses nothing;
+            # the loser's unit is destroyed with all of its resources.
+            for enemy in sorted(enemies, key=lambda u: u.resources, reverse=True):
+                if unit.resources > enemy.resources:
+                    self._remove_unit(enemy.id)
+                    self._record(
+                        owner,
+                        "battle",
+                        location,
+                        f"{unit.id} ({int(unit.resources)}) destroyed "
+                        f"{enemy.id} ({enemy.owner}, {int(enemy.resources)}) "
+                        f"at {location}.",
+                        reason,
+                        unit_id=unit.id,
+                    )
+                    self._broadcast(
+                        "unit_destroyed",
+                        actor=owner,
+                        victim=enemy.owner,
+                        unit=enemy.id,
+                        tile=location,
+                    )
+                else:
+                    message = (
+                        f"{unit.id} ({int(unit.resources)}) was destroyed by "
+                        f"{enemy.id} ({enemy.owner}, {int(enemy.resources)}) "
+                        f"at {location}."
+                    )
+                    self._remove_unit(unit.id)
+                    self._record(
+                        owner, "battle", location, message, reason, unit_id=unit.id
+                    )
+                    self._broadcast(
+                        "unit_destroyed",
+                        actor=enemy.owner,
+                        victim=owner,
+                        unit=unit.id,
+                        tile=location,
+                    )
+                    self._check_elimination(owner)
+                    return message
+
+        unit.tile = target
         result = (
             f"{unit.id} moved {direction} from "
             f"{origin.city_name or f'({origin.q},{origin.r})'} to {location} "
             f"(AP {unit.ap})."
         )
         self._record(owner, "move_unit", location, result, reason, unit_id=unit_id)
+        return result
+
+    def disband_unit(self, owner: str, unit_id: str, reason: str = "") -> str:
+        unit = self.units.get(unit_id)
+        if unit is None or unit.owner != owner:
+            return f"{owner} has no unit '{unit_id}'."
+        tile = unit.tile
+        if not (tile.is_city and tile.owner == owner):
+            return (
+                f"{unit.id} can only be disbanded while standing on a city you "
+                f"control."
+            )
+        returned = unit.resources
+        tile.resources += returned + DISBAND_BONUS
+        self._remove_unit(unit.id)
+        result = (
+            f"{unit.id} disbanded at {tile.city_name}: {int(returned)} resources "
+            f"returned to the city plus {int(DISBAND_BONUS)} bonus "
+            f"(city now {int(tile.resources)})."
+        )
+        self._record(owner, "disband_unit", tile.city_name, result, reason, unit_id=unit_id)
         return result
 
     # ---------------------------------------------------------------- combat
@@ -291,6 +381,8 @@ class World:
                 f"holds {captured} resources (halved)."
             )
             self._record(owner, "attack_city", city_name, result, reason, unit_id=unit_id)
+            self._broadcast("city_captured", actor=owner, city=city_name, previous=defender)
+            self._on_capital_change(city, defender, owner)
             if defender is not None:
                 self._check_elimination(defender)
             return result
@@ -391,6 +483,35 @@ class World:
             return
         self.agents[agent_name]["alive"] = False
         self.eliminated.append(agent_name)
+        self._broadcast("faction_eliminated", actor=agent_name)
+
+    def _on_capital_change(
+        self, city: Tile, previous_owner: Optional[str], new_owner: Optional[str]
+    ) -> None:
+        original = CAPITAL_OF.get(city.city_name)
+        if original is None or previous_owner == new_owner:
+            return
+        if previous_owner == original:
+            # Losing your capital hurts every remaining city and unit.
+            for tile in self.cities_of(previous_owner):
+                tile.resources = max(0.0, tile.resources - CAPITAL_LOSS_CITY_PENALTY)
+            for unit in self.units_of(previous_owner):
+                unit.resources = max(0.0, unit.resources - CAPITAL_LOSS_UNIT_PENALTY)
+            self._broadcast(
+                "capital_fallen",
+                owner=previous_owner,
+                city=city.city_name,
+                by=new_owner,
+            )
+        if new_owner == original:
+            # Recapturing your capital rallies the nation.
+            for tile in self.cities_of(new_owner):
+                tile.resources += CAPITAL_REGAIN_CITY_BONUS
+            for unit in self.units_of(new_owner):
+                unit.resources += CAPITAL_REGAIN_UNIT_BONUS
+            self._broadcast(
+                "capital_retaken", owner=new_owner, city=city.city_name
+            )
 
     # -------------------------------------------------------------- objectives
     def register_goals(self, agent_name: str, checks: dict[str, Callable]) -> None:
@@ -434,11 +555,18 @@ class World:
     def _describe_tile(self, tile: Tile) -> str:
         owner = tile.owner or "unowned"
         if tile.is_city:
-            return (
+            desc = (
                 f"{tile.city_name} (city, owner={tile.owner or 'neutral'}, "
                 f"res={int(tile.resources)})"
             )
-        return f"({tile.q},{tile.r}) land res={int(tile.resources)} owner={owner}"
+        else:
+            desc = f"({tile.q},{tile.r}) land res={int(tile.resources)} owner={owner}"
+        units = [u for u in self.units.values() if u.tile is tile]
+        if units:
+            desc += " units=" + ",".join(
+                f"{u.owner}:{u.id}({int(u.resources)})" for u in units
+            )
+        return desc
 
     def _unit_neighbourhood(self, unit: Unit) -> str:
         parts = []
@@ -478,22 +606,39 @@ class World:
             f"({int(sum(c.resources for c in cities))} in cities, "
             f"{int(sum(u.resources for u in units))} in units)."
         )
+        capital_of = {
+            nation: capital for nation, capital in hexmap.CAPITALS.items()
+        }
+        own_capital = hexmap.CAPITALS.get(agent_name)
         lines.append(f"Your cities ({len(cities)}):")
         for tile in cities:
+            mark = " [capital, +10/turn]" if tile.city_name == own_capital else ""
             lines.append(
                 f"- {tile.city_name} at ({tile.q},{tile.r}): "
-                f"resources={int(tile.resources)}"
+                f"resources={int(tile.resources)}{mark}"
             )
         lines.append(f"Your units ({len(units)}), each gets 2 action points per turn:")
         if units:
             for unit in units:
                 location = unit.tile.city_name or f"({unit.tile.q},{unit.tile.r})"
+                can_disband = (
+                    " (can disband here)" if unit.tile.owner == agent_name and unit.tile.is_city else ""
+                )
                 lines.append(
                     f"- {unit.id} at {location}: resources={int(unit.resources)}, "
-                    f"AP={unit.ap}"
+                    f"AP={unit.ap}{can_disband}"
                 )
         else:
             lines.append("- (none)")
+        lines.append(
+            "Capital rules: your capital earns +10/turn, other cities +5/turn. "
+            "Losing your capital costs each of your cities 2 and each unit 1 "
+            "resource; recapturing it grants each city 5 and each unit 2. "
+            "Disband a unit on your city to return its resources to that city "
+            "(plus a 5 bonus). Moving onto an enemy unit triggers a battle: the "
+            "side with more resources wins and loses nothing, the loser is "
+            "destroyed."
+        )
 
         cap = len(cities)
         used = self.spawns_this_turn.get(agent_name, 0)
@@ -504,13 +649,15 @@ class World:
 
         lines.append("All cities on the board:")
         for name, tile in sorted(self.cities.items()):
+            original = CAPITAL_OF.get(name)
+            mark = f" [capital of {original}]" if original else ""
             lines.append(
                 f"- {name} at ({tile.q},{tile.r}): owner={tile.owner or 'neutral'}, "
-                f"resources={int(tile.resources)}"
+                f"resources={int(tile.resources)}{mark}"
             )
 
         if units:
-            lines.append("Unit surroundings and routes (N/NE/SE/S/SW/NW):")
+            lines.append("Unit surroundings and routes (E/SE/SW/W/NW/NE):")
             for unit in units:
                 lines.append("- " + self._unit_neighbourhood(unit))
                 hint = self._route_hints(unit)
@@ -547,6 +694,7 @@ class World:
                     "r": tile.r,
                     "owner": tile.owner,
                     "resources": int(tile.resources),
+                    "capital": CAPITAL_OF.get(tile.city_name),
                 }
                 for tile in sorted(self.cities.values(), key=lambda t: t.city_name)
             ],

@@ -4,12 +4,16 @@
 
 ## 功能
 
-- 三个国家智能体：Germany / France / United Kingdom
+- 四个国家智能体：Germany / France / United Kingdom / Soviet Union
 - 每个智能体有独立的人格（persona）与三级目标（primary / secondary / tertiary）
-- 六边形棋盘（axial 坐标），约 12 座按欧洲地理大致布局的城市，城市之间随机生成资源地块
+- 六边形棋盘（pointy-top，整体近似矩形），约 26 座按欧洲地理大致布局的城市，城市之间随机生成资源地块
+- 单位为 2 行动点：方向为 E / SE / SW / W / NW / NE
 - 资源归属于城市 / 单位 / 地块：每回合每座**受控城市 +5**，非城市地块不增长；分数 = 计分时把受控资源全部相加
-- 军队单位由城市划拨资源生成，每回合 2 行动点：`move_unit` 行军 (1) / `attack_city` 攻城 (1) / `claim_tile` 占领空地 (2) / `garrison` 驻扎 (2)
+- 军队单位由城市划拨资源生成，每回合 2 行动点：`move_unit` 行军 (1) / `attack_city` 攻城 (1) / `claim_tile` 占领空地 (2) / `garrison` 驻扎 (2) / `disband_unit` 解散 (0)
 - 攻城结算：单位资源 > 城市资源 → 夺城且城市资源减半、单位资源不变；否则单位被消灭、资源清零
+- 单位交战：移动进入有敌方单位的格子触发战斗，资源多的一方获胜且无损，失败方单位直接消灭、资源清零（平局守方胜）
+- 解散：单位站在己方城市上可原地解散，资源归还该城市并额外 +5
+- 首都机制：首都每回合 +10（其他城市 +5）；**丢失首都**时己方每座城市 -2、每个单位 -1；**夺回首都**时己方每座城市 +5、每个单位 +2
 - LangGraph `StateGraph` 回合流程：`observe → (reflect) → plan → act → tools → collect`，一回合内可生成并指挥多个单位，最后 `end_turn`
 - FAISS + embedding 的语义记忆检索
 - 每 3 回合触发一次反思（reflection），每回合生成计划（plan）
@@ -66,6 +70,8 @@ FRANCE_PROVIDER=
 FRANCE_MODEL=
 UK_PROVIDER=
 UK_MODEL=
+USSR_PROVIDER=
+USSR_MODEL=
 
 # ---- Embedding（用于智能体记忆 / FAISS）----
 EMBEDDING_PROVIDER=zhipu
@@ -151,7 +157,7 @@ curl http://127.0.0.1:8000/api/stop
 2. **Use API models** 关闭时使用本地 Ollama；打开后每个国家可分别选择 Zhipu / DeepSeek / Qwen / Kimi，可全选相同或各选不同。页面初次加载时会按 `.env` 的默认/每国配置预选。
 3. 在 “API Keys” 区域为所选提供商填入密钥（留空则回退到系统环境变量 / `.env`）；都缺失时页面会提示，服务端在启动模拟时也会返回错误。
 4. **Interrupt** 按钮可请求中断：当前正在生成的智能体完成后停止，界面显示 `interrupted`。
-5. 右侧 Live Feed 实时显示行动、结果、Plan 与 Reflection；左侧显示国家面板、世界地图、关系矩阵与实时得分。
+5. 右侧 Live Feed 实时显示行动、结果、Plan 与 Reflection，并用高亮广播重要事件（城市被攻占、首都被攻陷/夺回、单位被歼灭、势力被淘汰）；左侧自上而下为世界地图、国家面板与关系矩阵。国家卡片可点击标题折叠/展开。
 6. 模型输出（planning / reflecting / acting）以可折叠面板实时流式显示：生成中自动展开并逐 token 刷新，结束后自动收起，点击标题可随时展开查看完整内容。
 7. **观战模式**：点击顶部 **观战模式 / Spectator**，隐藏配置面板，让六边形地图与 Live Feed 铺满整屏；再次点击退出。
 8. **可交互地图**：拖拽平移、滚轮缩放、**重置视图**按钮复位；点击任意六边形在下方信息框查看城市/地形、归属、资源与驻扎单位。
@@ -184,7 +190,7 @@ requirements.txt
 ## 配置说明
 
 - `.env`：API Key、对话模型（全局默认 + 每国覆盖）、embedding 模型；由 `python-dotenv` 自动加载。
-- `DEFAULT_PROVIDER` / `DEFAULT_MODEL`：默认对话模型；`GERMANY_*` / `FRANCE_*` / `UK_*` 可逐国覆盖。
+- `DEFAULT_PROVIDER` / `DEFAULT_MODEL`：默认对话模型；`GERMANY_*` / `FRANCE_*` / `UK_*` / `USSR_*` 可逐国覆盖。
 - `EMBEDDING_PROVIDER` / `EMBEDDING_MODEL`：智能体记忆用的 embedding，默认 `zhipu` / `embedding-3`。
 - `MAP_SEED`：可选，固定地图随机种子（地块资源值），便于复现同一张地图；不设置则每次随机。
 - `MAX_TURNS`：默认 20，可在 Web UI 或 `run(max_turns=...)` 覆盖。

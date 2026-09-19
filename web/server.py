@@ -32,6 +32,7 @@ NATION_SLUGS = {
     "germany": "Germany",
     "france": "France",
     "uk": "United Kingdom",
+    "ussr": "Soviet Union",
 }
 
 

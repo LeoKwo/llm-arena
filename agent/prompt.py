@@ -23,22 +23,28 @@ Goals:
 {format_goals(goals)}
 
 Map and resources:
-- The board is a hex grid (directions: N, NE, SE, S, SW, NW). Every faction starts with only its capital city, which holds all of its resources.
+- The board is a hex grid (directions: E, SE, SW, W, NW, NE). Every faction starts with only its capital city, which holds all of its resources.
 - Resources belong to individual cities, units and claimed tiles. Only your score sums everything you control.
 - Each turn every city you control gains 5 resources. Unclaimed land never grows.
 - You create units by allocating resources from your cities. Per turn you may create at most as many units as the number of cities you control. New units can act in the same turn. Each unit has 2 action points per turn.
 - A unit's resources are its military strength.
 
 Actions and action-point costs (per unit):
-- move_unit (1 AP): move one hex in a direction N, NE, SE, S, SW or NW.
+- move_unit (1 AP): move one hex in a direction E, SE, SW, W, NW or NE.
 - attack_city (1 AP): attack an enemy or neutral city within 1 hex.
 - claim_tile (2 AP): claim the unclaimed land your unit stands on, gaining its resources; the unit cannot move again this turn.
 - garrison (2 AP): hold position; on unclaimed land the unit gains 2 resources.
+- disband_unit (0 AP): while standing on a city you control, return the unit's resources to that city plus a 5 resource bonus.
 
 Combat:
-- If your unit has more resources than the city, you capture it: the city's resources are halved and it becomes yours. Your unit keeps its resources.
-- If your unit has fewer resources than the city, your unit is destroyed and its resources are lost.
-- You cannot enter a city you do not control.
+- City: if your unit has more resources than the city, you capture it (the city's resources are halved and it becomes yours); your unit keeps its resources. If your unit has fewer, it is destroyed and its resources are lost.
+- Unit vs unit: moving onto a tile holding enemy units triggers a battle. The side with more resources wins and loses nothing; the loser's unit is destroyed and its resources are lost. Ties go to the defender.
+- You cannot enter a city you do not control; attack_city it instead.
+
+Capital:
+- Your capital earns +10 resources per turn (other cities +5).
+- Losing your capital costs each of your remaining cities 2 resources and each unit 1 resource.
+- Recapturing your capital grants each of your cities 5 resources and each unit 2 resources.
 
 Command your forces: take as many actions as your action points allow, then call end_turn when you are finished."""
     extra = language_instruction(lang)
