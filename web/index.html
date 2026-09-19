@@ -164,16 +164,53 @@
   }
   .goals { margin-top: 8px; font-size: 11px; color: var(--muted); }
   .goals li { margin: 2px 0; }
-  .map { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 4px; }
-  .loc {
-    border-radius: 8px;
-    padding: 12px 8px;
-    text-align: center;
-    border: 1px solid var(--border);
+  .hexmap {
+    width: 100%;
+    height: auto;
+    max-height: 560px;
+    display: block;
+    margin-top: 4px;
     background: #0b0e13;
-    font-weight: 600;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    cursor: grab;
+    touch-action: none;
   }
-  .loc .owner { display: block; font-size: 11px; font-weight: 400; margin-top: 2px; }
+  .hexmap:active { cursor: grabbing; }
+  .hexmap polygon { transition: filter 0.1s; }
+  .hexmap polygon:hover { filter: brightness(1.5); }
+  .hexmap polygon.sel { stroke: #fff; stroke-width: 2; }
+  .hexinfo {
+    margin-top: 8px;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 10px;
+    font-size: 12px;
+    min-height: 34px;
+    color: var(--muted);
+  }
+  .hexinfo b { color: var(--text); }
+  .map-tools { display: flex; gap: 8px; align-items: center; margin-top: 8px; }
+  .map-tools .hint { flex: 1; }
+  body.spectate .setup-panel { display: none; }
+  body.spectate main {
+    grid-template-columns: 1fr 440px;
+    height: calc(100vh - 57px);
+    align-items: stretch;
+  }
+  body.spectate main > section { display: flex; flex-direction: column; min-height: 0; }
+  body.spectate .map-panel {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow: hidden;
+  }
+  body.spectate .hexmap { flex: 1; max-height: none; height: 100%; min-height: 0; }
+  body.spectate .feed-panel { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+  body.spectate .log { height: auto; flex: 1; min-height: 0; }
+  button.btn-ghost.active { background: var(--accent); color: #0b1220; }
   .relations { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-top: 10px; }
   .rel { background: #0b0e13; border: 1px solid var(--border); border-radius: 6px; padding: 6px; text-align: center; font-size: 11px; }
   .rel b { display: block; font-size: 13px; }
@@ -242,6 +279,7 @@
   <div class="turn-badge"><span data-i18n="turn">Turn</span> <span id="turn">-</span></div>
   <div id="status" class="status" data-i18n="status_idle">idle</div>
   <div class="spacer"></div>
+  <button id="spectate" class="btn-lang" type="button" data-i18n="spectator">Spectator</button>
   <button id="langtoggle" class="btn-lang" type="button">中文</button>
   <label><span data-i18n="max_turns">Max turns</span> <input id="maxturns" type="number" value="10" min="1" max="100" /></label>
   <button id="start" data-i18n="start">Start</button>
@@ -250,7 +288,7 @@
 
 <main>
   <section>
-    <div class="panel">
+    <div class="panel setup-panel">
       <h2 data-i18n="models">Models</h2>
       <div class="toggle-row">
         <label class="toggle">
@@ -268,19 +306,24 @@
       <div class="keywarn" id="keywarn"></div>
     </div>
 
-    <div class="panel" style="margin-top:16px">
+    <div class="panel setup-panel" style="margin-top:16px">
       <h2 data-i18n="nations">Nations</h2>
       <div class="nations" id="nations"></div>
     </div>
-    <div class="panel" style="margin-top:16px">
+    <div class="panel map-panel" style="margin-top:16px">
       <h2 data-i18n="world_map">World Map</h2>
-      <div class="map" id="map"></div>
+      <svg class="hexmap" id="hexmap" role="img"></svg>
+      <div class="map-tools">
+        <button id="mapreset" class="btn-ghost" type="button" data-i18n="reset_view">Reset view</button>
+        <span class="hint" data-i18n="map_hint">Drag to pan, scroll to zoom, click a hex for details.</span>
+      </div>
+      <div class="hexinfo" id="hexinfo" data-i18n="hex_info_empty">Click a hex to inspect.</div>
       <h2 style="margin-top:14px" data-i18n="relations">Relations</h2>
       <div class="relations" id="relations"></div>
     </div>
   </section>
 
-  <section class="panel">
+  <section class="panel feed-panel">
     <h2 data-i18n="live_feed">Live Feed</h2>
     <div class="log" id="log"></div>
   </section>
@@ -318,9 +361,29 @@ const I18N = {
     relations: "Relations",
     live_feed: "Live Feed",
     resources: "Resources",
+    cities: "Cities",
+    units: "Units",
     score: "Score",
     goal_progress: "Goal progress",
     no_interactions: "No interactions yet",
+    act_spawn_unit: "Spawn",
+    act_move_unit: "Move",
+    act_attack_city: "Attack",
+    act_claim_tile: "Claim",
+    act_garrison: "Garrison",
+    act_end_turn: "End turn",
+    spectator: "Spectator",
+    exit_spectate: "Exit",
+    reset_view: "Reset view",
+    map_hint: "Drag to pan, scroll to zoom, click a hex for details.",
+    hex_info_empty: "Click a hex to inspect.",
+    label_owner: "Owner",
+    label_resources: "Resources",
+    label_terrain: "Terrain",
+    label_units: "Units",
+    terrain_city: "City",
+    terrain_land: "Land",
+    neutral: "Neutral",
     status_idle: "idle",
     status_running: "running",
     status_connecting: "connecting...",
@@ -366,9 +429,29 @@ const I18N = {
     relations: "外交关系",
     live_feed: "实时动态",
     resources: "资源",
+    cities: "城市数",
+    units: "单位数",
     score: "得分",
     goal_progress: "目标进度",
     no_interactions: "暂无互动",
+    act_spawn_unit: "生成单位",
+    act_move_unit: "行军",
+    act_attack_city: "攻城",
+    act_claim_tile: "占领空地",
+    act_garrison: "驻扎",
+    act_end_turn: "结束回合",
+    spectator: "观战模式",
+    exit_spectate: "退出观战",
+    reset_view: "重置视图",
+    map_hint: "拖拽平移，滚轮缩放，点击六边形查看详情。",
+    hex_info_empty: "点击六边形查看详情。",
+    label_owner: "归属",
+    label_resources: "资源",
+    label_terrain: "地形",
+    label_units: "单位",
+    terrain_city: "城市",
+    terrain_land: "陆地",
+    neutral: "中立",
     status_idle: "空闲",
     status_running: "运行中",
     status_connecting: "连接中…",
@@ -439,6 +522,12 @@ function applyI18n() {
   });
   const toggle = el("langtoggle");
   if (toggle) toggle.textContent = lang === "en" ? "中文" : "EN";
+  const spec = el("spectate");
+  if (spec) {
+    spec.textContent = document.body.classList.contains("spectate")
+      ? t("exit_spectate")
+      : t("spectator");
+  }
   refreshDynamicI18n();
 }
 
@@ -717,6 +806,166 @@ function updateKeyWarning() {
     : "";
 }
 
+const HEX_SIZE = 13;
+const CITY_ABBR = {
+  Stockholm: "Stock", Moscow: "Mosc", London: "Lond", Amsterdam: "Amst",
+  Berlin: "Berl", Warsaw: "Wars", Paris: "Pari", Vienna: "Vien",
+  Madrid: "Madr", Lisbon: "Lisb", Rome: "Rome", Athens: "Athe",
+};
+
+function hexToPixel(q, r) {
+  const x = HEX_SIZE * 1.5 * q;
+  const y = HEX_SIZE * Math.sqrt(3) * (r + q / 2);
+  return [x, y];
+}
+
+function hexPoints(cx, cy, s) {
+  // Flat-top hexes: vertices at 0/60/.../300 degrees, matching the
+  // x = 1.5*s*q, y = sqrt(3)*s*(r + q/2) axial layout so edges tile exactly.
+  const pts = [];
+  for (let i = 0; i < 6; i++) {
+    const a = (Math.PI / 180) * (60 * i);
+    pts.push(`${(cx + s * Math.cos(a)).toFixed(1)},${(cy + s * Math.sin(a)).toFixed(1)}`);
+  }
+  return pts.join(" ");
+}
+
+const mapView = { x: 0, y: 0, scale: 1 };
+
+function applyMapTransform() {
+  const layer = document.getElementById("hexlayer");
+  if (layer) {
+    layer.setAttribute(
+      "transform",
+      `translate(${mapView.x.toFixed(1)},${mapView.y.toFixed(1)}) scale(${mapView.scale.toFixed(3)})`
+    );
+  }
+}
+
+function svgPoint(evt) {
+  const svg = el("hexmap");
+  if (!svg || !svg.getScreenCTM) return null;
+  const pt = svg.createSVGPoint();
+  pt.x = evt.clientX;
+  pt.y = evt.clientY;
+  return pt.matrixTransform(svg.getScreenCTM().inverse());
+}
+
+function resetMapView() {
+  mapView.x = 0;
+  mapView.y = 0;
+  mapView.scale = 1;
+  applyMapTransform();
+}
+
+function showHexInfo(q, r) {
+  const box = el("hexinfo");
+  if (!box || !lastWorld) return;
+  const tile = (lastWorld.tiles || []).find((x) => x.q === q && x.r === r);
+  if (!tile) return;
+  const units = (lastWorld.units || []).filter((u) => u.q === q && u.r === r);
+  const name = tile.is_city ? tile.city : `(${tile.q},${tile.r})`;
+  const terrain = tile.is_city ? t("terrain_city") : t("terrain_land");
+  const owner = tile.owner ? `<b style="color:${colorFor(tile.owner)}">${tile.owner}</b>` : t("neutral");
+  const unitText = units.length
+    ? units
+        .map(
+          (u) =>
+            `<b style="color:${colorFor(u.owner)}">${u.id}</b> ${u.owner} · res ${u.resources} · AP ${u.ap}`
+        )
+        .join("<br>")
+    : "-";
+  box.innerHTML =
+    `<div><b>${name}</b> · ${terrain}</div>` +
+    `<div>${t("label_owner")}: ${owner}</div>` +
+    `<div>${t("label_resources")}: ${tile.resources}</div>` +
+    `<div>${t("label_units")}:<br>${unitText}</div>`;
+  const svg = el("hexmap");
+  svg.querySelectorAll("polygon.sel").forEach((p) => p.classList.remove("sel"));
+  const poly = svg.querySelector(`polygon[data-q="${q}"][data-r="${r}"]`);
+  if (poly) poly.classList.add("sel");
+}
+
+function cityLabel(name) {
+  return CITY_ABBR[name] || name;
+}
+
+function actionLabel(name) {
+  const key = "act_" + name;
+  const table = I18N[lang] || I18N.en;
+  return table[key] !== undefined ? table[key] : name;
+}
+
+function renderHexMap(world) {
+  const svg = el("hexmap");
+  if (!svg) return;
+  const tiles = world.tiles || [];
+  if (!tiles.length) { svg.innerHTML = ""; return; }
+  const pos = {};
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  tiles.forEach((tile) => {
+    const [x, y] = hexToPixel(tile.q, tile.r);
+    pos[tile.q + "," + tile.r] = [x, y];
+    minX = Math.min(minX, x); maxX = Math.max(maxX, x);
+    minY = Math.min(minY, y); maxY = Math.max(maxY, y);
+  });
+  const pad = HEX_SIZE * 2;
+  svg.setAttribute(
+    "viewBox",
+    `${minX - pad} ${minY - pad} ${maxX - minX + pad * 2} ${maxY - minY + pad * 2}`
+  );
+
+  const unitsByTile = {};
+  (world.units || []).forEach((u) => {
+    const k = u.q + "," + u.r;
+    (unitsByTile[k] = unitsByTile[k] || []).push(u);
+  });
+
+  const parts = [];
+  tiles.forEach((tile) => {
+    const [x, y] = pos[tile.q + "," + tile.r];
+    const ownerColor = tile.owner ? colorFor(tile.owner) : "#3a4150";
+    const title =
+      (tile.is_city ? tile.city : `(${tile.q},${tile.r})`) +
+      ` · ${tile.owner || "neutral"} · ${tile.resources}`;
+    if (tile.is_city) {
+      parts.push(
+        `<polygon class="hex" data-q="${tile.q}" data-r="${tile.r}" points="${hexPoints(x, y, HEX_SIZE)}" fill="${ownerColor}" stroke="#0b0e13" stroke-width="1.5"><title>${title}</title></polygon>`
+      );
+      parts.push(
+        `<text x="${x}" y="${y - 1}" text-anchor="middle" font-size="8" font-weight="700" fill="#ffffff">${cityLabel(tile.city)}</text>`
+      );
+      parts.push(
+        `<text x="${x}" y="${y + 8}" text-anchor="middle" font-size="7" fill="#dfe3ea">${tile.resources}</text>`
+      );
+    } else {
+      parts.push(
+        `<polygon class="hex" data-q="${tile.q}" data-r="${tile.r}" points="${hexPoints(x, y, HEX_SIZE)}" fill="${ownerColor}" fill-opacity="${tile.owner ? 0.4 : 1}" stroke="#0b0e13" stroke-width="1"><title>${title}</title></polygon>`
+      );
+      if (tile.resources > 0) {
+        parts.push(
+          `<text x="${x}" y="${y + 3}" text-anchor="middle" font-size="7" fill="#8b93a5">${tile.resources}</text>`
+        );
+      }
+    }
+    const us = unitsByTile[tile.q + "," + tile.r] || [];
+    us.forEach((u, i) => {
+      const ox = (i - (us.length - 1) / 2) * 8;
+      const uy = y + HEX_SIZE * 0.7;
+      parts.push(
+        `<circle cx="${x + ox}" cy="${uy}" r="6" fill="${colorFor(u.owner)}" stroke="#08090c" stroke-width="1"><title>${u.id} · ${u.owner} · res ${u.resources} · AP ${u.ap}</title></circle>`
+      );
+      parts.push(
+        `<text x="${x + ox}" y="${uy + 2.5}" text-anchor="middle" font-size="6" font-weight="700" fill="#08090c">${u.resources}</text>`
+      );
+    });
+  });
+  svg.innerHTML =
+    `<g id="hexlayer" transform="translate(${mapView.x.toFixed(1)},${mapView.y.toFixed(1)}) scale(${mapView.scale.toFixed(3)})">` +
+    parts.join("") +
+    `</g>`;
+}
+
 function renderNations(nations, world) {
   lastNations = nations;
   if (world) lastWorld = world;
@@ -735,7 +984,8 @@ function renderNations(nations, world) {
       <div class="name">${name}</div>
       <div class="model">${meta.provider || "ollama"} · ${meta.model}</div>
       <div class="stat"><span>${t("resources")}</span><b data-f="resources">-</b></div>
-      <div class="bar"><span data-f="resbar" style="width:0%"></span></div>
+      <div class="stat"><span>${t("cities")}</span><b data-f="cities">0</b></div>
+      <div class="stat"><span>${t("units")}</span><b data-f="units">0</b></div>
       <div class="stat"><span>${t("score")}</span><b data-f="score">0</b></div>
       <div class="stat"><span>${t("goal_progress")}</span><b data-f="goal">0%</b></div>
       <div class="terr" data-f="terr"></div>
@@ -750,23 +1000,30 @@ function renderNations(nations, world) {
 function updateWorld(world) {
   lastWorld = world;
   el("turn").textContent = world.turn;
-  const maxRes = Math.max(100, ...Object.values(world.agents).map(a => a.resources));
-  Object.entries(world.agents).forEach(([name, a]) => {
+  Object.entries(world.agents || {}).forEach(([name, a]) => {
     const card = nationEls[name];
     if (!card) return;
     card.classList.toggle("eliminated", !a.alive);
-    card.querySelector('[data-f="resources"]').textContent = a.resources;
-    card.querySelector('[data-f="resbar"]').style.width = Math.min(100, (a.resources / maxRes) * 100) + "%";
-    card.querySelector('[data-f="score"]').textContent = Math.round(world.scores[name] || 0);
-    const goal = Math.round((world.goal_completion[name] || 0) * 100);
-    card.querySelector('[data-f="goal"]').textContent = goal + "%";
-    card.querySelector('[data-f="terr"]').innerHTML =
-      (a.territories || []).map(t => `<span class="chip">${t}</span>`).join("");
+    const set = (field, value) => {
+      const node = card.querySelector('[data-f="' + field + '"]');
+      if (node) node.textContent = value;
+    };
+    set("resources", a.resources_total);
+    set("cities", (a.cities || []).length);
+    set("units", a.unit_count || 0);
+    set("score", Math.round((world.scores && world.scores[name]) || 0));
+    set(
+      "goal",
+      Math.round(((world.goal_completion && world.goal_completion[name]) || 0) * 100) + "%"
+    );
+    const terr = card.querySelector('[data-f="terr"]');
+    if (terr) {
+      terr.innerHTML = (a.cities || [])
+        .map((c) => `<span class="chip">${c}</span>`)
+        .join("");
+    }
   });
-  el("map").innerHTML = Object.entries(world.locations).map(([loc, owner]) => {
-    const color = owner === "Neutral" ? "#3a4150" : colorFor(owner);
-    return `<div class="loc" style="border-color:${color}">${loc}<span class="owner" style="color:${color}">${owner}</span></div>`;
-  }).join("");
+  renderHexMap(world);
   const rel = world.relations || {};
   const keys = Object.keys(rel);
   el("relations").innerHTML = keys.length
@@ -821,7 +1078,7 @@ function handle(event) {
       const reason = args.reason ? `<div class="res">${t("reason", args.reason)}</div>` : "";
       log(
         `<div class="head"><span class="who" style="color:${color}">${event.agent}</span>` +
-        `<span class="act">${a.action || "?"}</span></div>` +
+        `<span class="act">${actionLabel(a.action || "?")}</span></div>` +
         (shown ? `<div class="res">${shown}</div>` : "") +
         reason +
         `<div class="res">${event.result || ""}</div>`,
@@ -924,6 +1181,63 @@ el("langtoggle").addEventListener("click", () => {
   lang = lang === "en" ? "zh" : "en";
   applyI18n();
 });
+el("spectate").addEventListener("click", () => {
+  document.body.classList.toggle("spectate");
+  applyI18n();
+  resetMapView();
+});
+el("mapreset").addEventListener("click", resetMapView);
+
+const hexmap = el("hexmap");
+let hexPan = null;
+let hexMoved = false;
+hexmap.addEventListener("pointerdown", (e) => {
+  hexPan = { x: e.clientX, y: e.clientY, vx: mapView.x, vy: mapView.y };
+  hexMoved = false;
+  if (hexmap.setPointerCapture) hexmap.setPointerCapture(e.pointerId);
+});
+hexmap.addEventListener("pointermove", (e) => {
+  if (!hexPan) return;
+  const dx = e.clientX - hexPan.x;
+  const dy = e.clientY - hexPan.y;
+  if (Math.abs(dx) + Math.abs(dy) > 4) hexMoved = true;
+  const rect = hexmap.getBoundingClientRect();
+  const vb = hexmap.viewBox.baseVal;
+  const sx = vb.width / (rect.width || 1);
+  const sy = vb.height / (rect.height || 1);
+  mapView.x = hexPan.vx + dx * sx;
+  mapView.y = hexPan.vy + dy * sy;
+  applyMapTransform();
+});
+const endHexPan = () => { hexPan = null; };
+hexmap.addEventListener("pointerup", endHexPan);
+hexmap.addEventListener("pointercancel", endHexPan);
+hexmap.addEventListener("pointerleave", endHexPan);
+hexmap.addEventListener(
+  "wheel",
+  (e) => {
+    e.preventDefault();
+    const p = svgPoint(e);
+    if (!p) return;
+    const factor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
+    const next = Math.max(0.4, Math.min(6, mapView.scale * factor));
+    const k = next / mapView.scale;
+    mapView.x = p.x - k * (p.x - mapView.x);
+    mapView.y = p.y - k * (p.y - mapView.y);
+    mapView.scale = next;
+    applyMapTransform();
+  },
+  { passive: false }
+);
+hexmap.addEventListener("click", (e) => {
+  if (hexMoved) return;
+  const poly = e.target && e.target.closest ? e.target.closest("polygon") : null;
+  if (!poly) return;
+  const q = parseInt(poly.getAttribute("data-q"), 10);
+  const r = parseInt(poly.getAttribute("data-r"), 10);
+  if (!isNaN(q) && !isNaN(r)) showHexInfo(q, r);
+});
+
 applyI18n();
 loadProviders();
 </script>

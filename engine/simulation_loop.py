@@ -116,6 +116,7 @@ def run(
                     )
                     return None
                 emit({"type": "agent_thinking", "agent": name, "turn": turn})
+                world.begin_turn(name)
                 previous_reflections = len(carry[name])
                 state = {
                     "agent_name": name,
@@ -127,24 +128,24 @@ def run(
                 result = bundle["graph"].invoke(state)
                 reflections = result.get("reflections", carry[name])
                 carry[name] = reflections
-                action = result.get("action")
-                outcome = result.get("result")
-                bundle["memory"].add(
-                    result.get("observation", ""), action, outcome or ""
-                )
-                emit(
-                    {
-                        "type": "agent_action",
-                        "turn": turn,
-                        "agent": name,
-                        "action": action,
-                        "result": outcome,
-                        "plan": result.get("plan", ""),
-                        "observation": result.get("observation", ""),
-                        "memory_context": result.get("memory_context", []),
-                        "reflections": reflections[previous_reflections:],
-                    }
-                )
+                observation = result.get("observation", "")
+                actions = result.get("actions") or [result.get("action")]
+                for entry in actions:
+                    if not entry:
+                        continue
+                    outcome = entry.get("result", "") if isinstance(entry, dict) else ""
+                    bundle["memory"].add(observation, entry, outcome or "")
+                    emit(
+                        {
+                            "type": "agent_action",
+                            "turn": turn,
+                            "agent": name,
+                            "action": entry,
+                            "result": outcome,
+                            "plan": result.get("plan", ""),
+                            "reflections": reflections[previous_reflections:],
+                        }
+                    )
                 emit({"type": "world_state", "world": world.snapshot()})
 
             world.advance()

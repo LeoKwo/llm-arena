@@ -1,90 +1,151 @@
 from __future__ import annotations
 
+import os
+import random
 from typing import Callable, Optional
+
+from world import hexmap
+from world.hexmap import DIRECTIONS, hex_distance, direction_toward, neighbors
 
 TERRITORY_WEIGHT = 20.0
 GOAL_WEIGHT = 100.0
 GOAL_WEIGHTS = {"primary": 0.5, "secondary": 0.3, "tertiary": 0.2}
 
-NEUTRAL_CAPTURE_COST = 15.0
-WAIT_REGENERATION = 5.0
-TURN_REGENERATION = 2.0
-TRADE_GAIN = 10.0
-THREAT_COST = 5.0
+CITY_INCOME = 5.0
+GARRISON_GAIN = 2.0
+MOVE_AP = 1
+ATTACK_AP = 1
+CLAIM_AP = 2
+GARRISON_AP = 2
+MAX_AP = 2
+WAR_RELATION_THRESHOLD = -20.0
 
 
-def build_default_world() -> "World":
-    return World(
-        agents={
-            "Germany": {"home": "Berlin"},
-            "France": {"home": "Paris"},
-            "United Kingdom": {"home": "London"},
-        },
-        locations={
-            "Berlin": "Germany",
-            "Paris": "France",
-            "London": "United Kingdom",
-            "Warsaw": None,
-            "Madrid": None,
-            "Rome": None,
-        },
-        starting_resources={"Germany": 100, "France": 80, "United Kingdom": 90},
-    )
+class Tile:
+    __slots__ = ("q", "r", "resources", "owner", "city_name")
+
+    def __init__(
+        self,
+        q: int,
+        r: int,
+        resources: float,
+        owner: Optional[str] = None,
+        city_name: Optional[str] = None,
+    ) -> None:
+        self.q = q
+        self.r = r
+        self.resources = float(resources)
+        self.owner = owner
+        self.city_name = city_name
+
+    @property
+    def is_city(self) -> bool:
+        return self.city_name is not None
+
+    @property
+    def coords(self) -> tuple[int, int]:
+        return (self.q, self.r)
+
+
+class Unit:
+    __slots__ = ("id", "owner", "tile", "resources", "ap")
+
+    def __init__(
+        self, unit_id: str, owner: str, tile: Tile, resources: float, ap: int = MAX_AP
+    ) -> None:
+        self.id = unit_id
+        self.owner = owner
+        self.tile = tile
+        self.resources = float(resources)
+        self.ap = ap
+
+
+def build_default_world(seed=None) -> "World":
+    if seed is None:
+        raw = (os.environ.get("MAP_SEED") or "").strip()
+        seed = raw or None
+    rng = random.Random(seed)
+
+    tiles: dict[tuple[int, int], Tile] = {}
+    for (q, r) in hexmap.board_coords():
+        tiles[(q, r)] = Tile(q, r, rng.uniform(*hexmap.TILE_RESOURCE_RANGE))
+
+    cities: dict[str, Tile] = {}
+    for name, (q, r) in hexmap.CITY_COORDS.items():
+        tile = tiles[(q, r)]
+        tile.city_name = name
+        cities[name] = tile
+
+    for nation, capital in hexmap.CAPITALS.items():
+        cities[capital].owner = nation
+        cities[capital].resources = hexmap.CAPITAL_RESOURCES
+    for name, tile in cities.items():
+        if tile.owner is None:
+            tile.resources = rng.uniform(*hexmap.CITY_RESOURCE_RANGE)
+
+    agents = {nation: {"home": hexmap.CAPITALS[nation]} for nation in hexmap.CAPITALS}
+    return World(tiles=tiles, cities=cities, agents=agents)
 
 
 class World:
     def __init__(
         self,
+        tiles: dict[tuple[int, int], Tile],
+        cities: dict[str, Tile],
         agents: dict[str, dict],
-        locations: dict[str, Optional[str]],
-        starting_resources: dict[str, int],
     ) -> None:
         self.turn = 0
-        self.locations: dict[str, Optional[str]] = dict(locations)
-        self.agents: dict[str, dict] = {}
-        for name, info in agents.items():
-            home = info.get("home") or next(
-                (loc for loc, owner in locations.items() if owner == name), name
-            )
-            self.agents[name] = {
-                "home": home,
-                "location": home,
-                "resources": float(starting_resources.get(name, 100)),
-                "alive": True,
-            }
+        self.tiles = tiles
+        self.cities = cities
+        self.agents: dict[str, dict] = {
+            name: {"home": info.get("home"), "alive": True}
+            for name, info in agents.items()
+        }
+        self.units: dict[str, Unit] = {}
+        self._unit_seq = 0
         self.history: list[dict] = []
         self.relations: dict[tuple[str, str], float] = {}
         self.goal_checks: dict[str, dict[str, Callable]] = {}
         self.eliminated: list[str] = []
-        self.initial_territories = {
-            name: len(self.territories_of(name)) for name in self.agents
-        }
-        self.initial_resources = {
-            name: self.agents[name]["resources"] for name in self.agents
-        }
+        self.spawns_this_turn: dict[str, int] = {name: 0 for name in agents}
 
-    def register_goals(self, agent_name: str, checks: dict[str, Callable]) -> None:
-        self.goal_checks[agent_name] = checks
-
+    # ------------------------------------------------------------------ lookup
     def living_agents(self) -> list[str]:
         return [name for name, a in self.agents.items() if a["alive"]]
 
-    def territories_of(self, agent_name: str) -> list[str]:
-        return [loc for loc, owner in self.locations.items() if owner == agent_name]
+    def cities_of(self, agent_name: str) -> list[Tile]:
+        return [
+            tile
+            for _, tile in sorted(self.cities.items())
+            if tile.owner == agent_name
+        ]
 
-    def resources(self, agent_name: str) -> float:
-        return self.agents[agent_name]["resources"]
+    def units_of(self, agent_name: str) -> list[Unit]:
+        return [unit for unit in self.units.values() if unit.owner == agent_name]
+
+    def city_count(self, agent_name: str) -> int:
+        return len(self.cities_of(agent_name))
+
+    def unit_count(self, agent_name: str) -> int:
+        return len(self.units_of(agent_name))
+
+    def resources_total(self, agent_name: str) -> float:
+        cities = sum(tile.resources for tile in self.cities_of(agent_name))
+        units = sum(unit.resources for unit in self.units_of(agent_name))
+        return cities + units
 
     def relation(self, a: str, b: str) -> float:
         if a == b:
             return 100.0
-        return self.relations.get((a, b) if a < b else (b, a), 0.0)
+        key = (a, b) if a < b else (b, a)
+        return self.relations.get(key, 0.0)
 
     def war_count(self, agent_name: str) -> int:
         return sum(
             1
             for other in self.living_agents()
-            if other != agent_name and self.relation(agent_name, other) <= -20
+            if other != agent_name
+            and self.relation(agent_name, other) <= WAR_RELATION_THRESHOLD
         )
 
     def _set_relation(self, a: str, b: str, delta: float) -> None:
@@ -92,223 +153,248 @@ class World:
         value = self.relations.get(key, 0.0) + delta
         self.relations[key] = max(-100.0, min(100.0, value))
 
-    def _find_location(self, target: Optional[str]) -> Optional[str]:
-        if not target:
-            return None
-        if target in self.locations:
-            return target
-        lowered = target.strip().lower()
-        for loc in self.locations:
-            if loc.lower() == lowered:
-                return loc
-        return None
+    def tile_at(self, q: int, r: int) -> Optional[Tile]:
+        return self.tiles.get((q, r))
 
-    def _target_location(self, target: Optional[str]) -> Optional[str]:
-        loc = self._find_location(target)
-        if loc is not None:
-            return loc
-        agent = self.resolve_target(target)
-        if agent is not None:
-            home = self.agents[agent]["home"]
-            if self.locations.get(home) == agent:
-                return home
-            territories = self.territories_of(agent)
-            return territories[0] if territories else None
-        return None
+    def adjacent(self, tile: Tile) -> dict[str, Tile]:
+        found = {}
+        for name, (q, r) in neighbors(tile.q, tile.r).items():
+            neighbor = self.tiles.get((q, r))
+            if neighbor is not None:
+                found[name] = neighbor
+        return found
 
-    def resolve_target(self, target: Optional[str]) -> Optional[str]:
-        if not target:
-            return None
-        if target in self.agents:
-            return target
-        lowered = target.strip().lower()
-        for name in self.agents:
-            if name.lower() == lowered:
-                return name
-        loc = self._find_location(target)
-        if loc is not None:
-            return self.locations.get(loc)
-        return None
+    # ------------------------------------------------------------- turn cycle
+    def begin_turn(self, agent_name: str) -> None:
+        if not self.agents[agent_name]["alive"]:
+            return
+        for tile in self.cities_of(agent_name):
+            tile.resources += CITY_INCOME
+        for unit in self.units_of(agent_name):
+            unit.ap = MAX_AP
+        self.spawns_this_turn[agent_name] = 0
 
-    def apply_action(
+    def advance(self) -> None:
+        self.turn += 1
+
+    # ------------------------------------------------------------- unit setup
+    def _new_unit_id(self) -> str:
+        self._unit_seq += 1
+        return f"U{self._unit_seq}"
+
+    def spawn_unit(
+        self, owner: str, city_name: str, amount, reason: str = ""
+    ) -> str:
+        if not self.agents[owner]["alive"]:
+            return f"{owner} has been eliminated and cannot act."
+        city = self.cities.get(city_name)
+        if city is None:
+            return f"Unknown city '{city_name}'."
+        if city.owner != owner:
+            return f"{owner} does not control {city_name}."
+        try:
+            amount = float(amount)
+        except (TypeError, ValueError):
+            return f"amount must be a number, got '{amount}'."
+        if amount <= 0:
+            return "amount must be greater than 0."
+        if amount > city.resources:
+            return (
+                f"Cannot allocate {int(amount)} from {city_name}; "
+                f"it only has {int(city.resources)} resources."
+            )
+        cap = self.city_count(owner)
+        if self.spawns_this_turn.get(owner, 0) >= cap:
+            return (
+                f"Spawn limit reached: {owner} controls {cap} cities and may "
+                f"create at most {cap} units per turn."
+            )
+        city.resources -= amount
+        unit = Unit(self._new_unit_id(), owner, city, amount, ap=MAX_AP)
+        self.units[unit.id] = unit
+        self.spawns_this_turn[owner] = self.spawns_this_turn.get(owner, 0) + 1
+        result = (
+            f"{owner} created unit {unit.id} at {city_name} with "
+            f"{int(amount)} resources (AP {unit.ap})."
+        )
+        self._record(owner, "spawn_unit", city_name, result, reason)
+        return result
+
+    # --------------------------------------------------------------- movement
+    def move_unit(
+        self, owner: str, unit_id: str, direction: str, reason: str = ""
+    ) -> str:
+        unit = self.units.get(unit_id)
+        if unit is None or unit.owner != owner:
+            return f"{owner} has no unit '{unit_id}'."
+        if unit.ap < MOVE_AP:
+            return f"{unit.id} has no action points left to move."
+        direction = (direction or "").strip().upper()
+        delta = DIRECTIONS.get(direction)
+        if delta is None:
+            return (
+                f"Unknown direction '{direction}'. Use one of: "
+                f"{', '.join(DIRECTIONS)}."
+            )
+        target = self.tiles.get((unit.tile.q + delta[0], unit.tile.r + delta[1]))
+        if target is None:
+            return f"There is no tile to the {direction} of {unit.id}."
+        if target.is_city and target.owner != owner:
+            return (
+                f"{unit.id} cannot enter {target.city_name}; enemy or neutral "
+                f"cities can only be taken with attack_city."
+            )
+        origin = unit.tile
+        unit.tile = target
+        unit.ap -= MOVE_AP
+        location = target.city_name or f"({target.q},{target.r})"
+        result = (
+            f"{unit.id} moved {direction} from "
+            f"{origin.city_name or f'({origin.q},{origin.r})'} to {location} "
+            f"(AP {unit.ap})."
+        )
+        self._record(owner, "move_unit", location, result, reason, unit_id=unit_id)
+        return result
+
+    # ---------------------------------------------------------------- combat
+    def attack_city(
+        self, owner: str, unit_id: str, city_name: str, reason: str = ""
+    ) -> str:
+        unit = self.units.get(unit_id)
+        if unit is None or unit.owner != owner:
+            return f"{owner} has no unit '{unit_id}'."
+        city = self.cities.get(city_name)
+        if city is None:
+            return f"Unknown city '{city_name}'."
+        if city.owner == owner:
+            return f"{owner} already controls {city_name}."
+        if unit.ap < ATTACK_AP:
+            return f"{unit.id} has no action points left to attack."
+        if hex_distance(unit.tile.coords, city.coords) > 1:
+            return (
+                f"{unit.id} is not within 1 tile of {city_name}; move closer "
+                f"first."
+            )
+
+        unit.ap -= ATTACK_AP
+        defender = city.owner
+        if defender is not None:
+            self._set_relation(owner, defender, -30.0)
+
+        if unit.resources > city.resources:
+            captured = int(city.resources * 0.5)
+            city.resources = float(captured)
+            city.owner = owner
+            result = (
+                f"{owner}'s {unit.id} ({int(unit.resources)}) captured "
+                f"{city_name} from {defender or 'neutral forces'}; the city now "
+                f"holds {captured} resources (halved)."
+            )
+            self._record(owner, "attack_city", city_name, result, reason, unit_id=unit_id)
+            if defender is not None:
+                self._check_elimination(defender)
+            return result
+
+        spent = int(unit.resources)
+        unit.resources = 0.0
+        self._remove_unit(unit.id)
+        result = (
+            f"{owner}'s {unit_id} ({spent}) failed to take {city_name} "
+            f"({int(city.resources)}); the unit was destroyed."
+        )
+        self._record(owner, "attack_city", city_name, result, reason, unit_id=unit_id)
+        self._check_elimination(owner)
+        return result
+
+    # ------------------------------------------------------------ land actions
+    def claim_tile(self, owner: str, unit_id: str, reason: str = "") -> str:
+        unit = self.units.get(unit_id)
+        if unit is None or unit.owner != owner:
+            return f"{owner} has no unit '{unit_id}'."
+        if unit.ap < CLAIM_AP:
+            return f"{unit.id} does not have enough action points to claim land."
+        tile = unit.tile
+        if tile.is_city:
+            return f"{unit.id} is standing on a city; use attack_city instead."
+        if tile.owner is not None:
+            return f"Tile ({tile.q},{tile.r}) is already controlled by {tile.owner}."
+        gained = int(tile.resources)
+        unit.resources += tile.resources
+        tile.resources = 0.0
+        tile.owner = owner
+        unit.ap = max(0, unit.ap - CLAIM_AP)
+        result = (
+            f"{unit.id} claimed ({tile.q},{tile.r}) and gained {gained} "
+            f"resources (unit now has {int(unit.resources)}); it cannot move "
+            f"again this turn."
+        )
+        self._record(owner, "claim_tile", f"({tile.q},{tile.r})", result, reason, unit_id=unit_id)
+        return result
+
+    def garrison(self, owner: str, unit_id: str, reason: str = "") -> str:
+        unit = self.units.get(unit_id)
+        if unit is None or unit.owner != owner:
+            return f"{owner} has no unit '{unit_id}'."
+        if unit.ap < GARRISON_AP:
+            return f"{unit.id} does not have enough action points to garrison."
+        tile = unit.tile
+        unit.ap = max(0, unit.ap - GARRISON_AP)
+        if tile.is_city or tile.owner is not None:
+            result = (
+                f"{unit.id} garrisoned at "
+                f"({tile.q},{tile.r}) but gained nothing (the tile is not "
+                f"unclaimed land)."
+            )
+        else:
+            unit.resources += GARRISON_GAIN
+            result = (
+                f"{unit.id} garrisoned at ({tile.q},{tile.r}) and gained "
+                f"{int(GARRISON_GAIN)} resources (now {int(unit.resources)})."
+            )
+        self._record(owner, "garrison", f"({tile.q},{tile.r})", result, reason, unit_id=unit_id)
+        return result
+
+    def end_turn(self, owner: str, reason: str = "") -> str:
+        result = f"{owner} ended its turn."
+        self._record(owner, "end_turn", "", result, reason)
+        return result
+
+    # ----------------------------------------------------------------- history
+    def _record(
         self,
         actor: str,
-        action_type: str,
-        target: Optional[str] = None,
-        method: Optional[str] = None,
+        action: str,
+        target: str,
+        result: str,
         reason: str = "",
-    ) -> str:
-        if not self.agents[actor]["alive"]:
-            return f"{actor} has been eliminated and cannot act."
-        action = (action_type or "").strip().lower()
-        handler = {
-            "observe": self._observe,
-            "move": self._move,
-            "interact": self._interact,
-            "attack": self._attack,
-            "wait": self._wait,
-        }.get(action)
-        if handler is None:
-            return f"Unknown action '{action_type}'."
-        result = handler(actor, target, method)
+        unit_id: str = "",
+    ) -> None:
         self.history.append(
             {
                 "turn": self.turn,
                 "actor": actor,
                 "action": action,
+                "unit": unit_id,
                 "target": target,
-                "method": method,
                 "reason": reason,
                 "result": result,
             }
         )
-        return result
 
-    def _observe(self, actor: str, target: Optional[str], method: Optional[str]) -> str:
-        if target:
-            return self.describe(target)
-        return self.get_observation(actor)
-
-    def _move(self, actor: str, target: Optional[str], method: Optional[str]) -> str:
-        loc = self._find_location(target)
-        if loc is None:
-            return f"{actor} cannot move: unknown location '{target}'."
-        owner = self.locations.get(loc)
-        if owner is not None and owner != actor:
-            return (
-                f"{actor} cannot move into {loc}, it is controlled by {owner}. "
-                "Use attack to contest it."
-            )
-        previous = self.agents[actor]["location"]
-        self.agents[actor]["location"] = loc
-        return f"{actor} moved from {previous} to {loc}."
-
-    def _interact(self, actor: str, target: Optional[str], method: Optional[str]) -> str:
-        other = self.resolve_target(target)
-        if other is None or other == actor:
-            return f"{actor} found no valid interaction target '{target}'."
-        method_name = (method or "talk").strip().lower()
-        if method_name in {"trade", "trading", "trades"}:
-            self.agents[actor]["resources"] += TRADE_GAIN
-            self.agents[other]["resources"] += TRADE_GAIN
-            self._set_relation(actor, other, 15.0)
-            return f"{actor} traded with {other}: both gained {int(TRADE_GAIN)} resources."
-        if method_name in {"threaten", "threat", "intimidate"}:
-            self.agents[other]["resources"] -= THREAT_COST
-            self._set_relation(actor, other, -20.0)
-            self._check_elimination(other)
-            return f"{actor} threatened {other}, costing it {int(THREAT_COST)} resources."
-        if method_name in {"ally", "alliance", "cooperate"}:
-            self._set_relation(actor, other, 25.0)
-            return f"{actor} proposed cooperation with {other}."
-        self._set_relation(actor, other, 5.0)
-        return f"{actor} talked with {other}."
-
-    def _attack(self, actor: str, target: Optional[str], method: Optional[str]) -> str:
-        loc = self._target_location(target)
-        if loc is None:
-            return f"{actor} cannot attack unknown target '{target}'."
-        owner = self.locations.get(loc)
-        if owner == actor:
-            return f"{actor} already controls {loc}."
-        if owner is None:
-            self.agents[actor]["resources"] -= NEUTRAL_CAPTURE_COST
-            self.locations[loc] = actor
-            return (
-                f"{actor} occupied neutral {loc} at a cost of "
-                f"{int(NEUTRAL_CAPTURE_COST)} resources."
-            )
-        attacker = self.agents[actor]
-        defender = self.agents[owner]
-        attacker_power = max(attacker["resources"], 0.0) * 0.6
-        defender_power = max(defender["resources"], 0.0) * 0.5
-        self._set_relation(actor, owner, -30.0)
-        if attacker_power > defender_power:
-            attacker["resources"] -= defender_power * 0.4
-            defender["resources"] -= attacker_power * 0.5
-            self.locations[loc] = actor
-            self._check_elimination(owner)
-            return f"{actor} defeated {owner} at {loc} and captured it."
-        attacker["resources"] -= defender_power * 0.5
-        defender["resources"] -= attacker_power * 0.3
-        self._check_elimination(owner)
-        return f"{actor}'s attack on {owner} at {loc} was repelled."
-
-    def _wait(self, actor: str, target: Optional[str], method: Optional[str]) -> str:
-        self.agents[actor]["resources"] += WAIT_REGENERATION
-        return f"{actor} waited and regrouped (+{int(WAIT_REGENERATION)} resources)."
+    def _remove_unit(self, unit_id: str) -> None:
+        self.units.pop(unit_id, None)
 
     def _check_elimination(self, agent_name: str) -> None:
-        if self.agents[agent_name]["resources"] > 0:
-            return
         if not self.agents[agent_name]["alive"]:
             return
-        self.agents[agent_name]["resources"] = 0.0
+        if self.city_count(agent_name) > 0 or self.unit_count(agent_name) > 0:
+            return
         self.agents[agent_name]["alive"] = False
         self.eliminated.append(agent_name)
-        for loc, owner in list(self.locations.items()):
-            if owner == agent_name:
-                self.locations[loc] = None
 
-    def advance(self) -> None:
-        self.turn += 1
-        for name in self.living_agents():
-            self.agents[name]["resources"] += TURN_REGENERATION
-
-    def describe(self, target: str) -> str:
-        agent = self.resolve_target(target)
-        if agent is not None:
-            info = self.agents[agent]
-            status = "alive" if info["alive"] else "eliminated"
-            territories = ", ".join(self.territories_of(agent)) or "none"
-            relations = ", ".join(
-                f"{other}={int(self.relation(agent, other))}"
-                for other in self.agents
-                if other != agent
-            )
-            return (
-                f"{agent} ({status}): resources={int(info['resources'])}, "
-                f"location={info['location']}, territories=[{territories}], "
-                f"relations=[{relations}]"
-            )
-        loc = self._find_location(target)
-        if loc is not None:
-            owner = self.locations.get(loc) or "neutral"
-            return f"{loc}: controlled by {owner}"
-        return f"Unknown target '{target}'."
-
-    def get_observation(self, agent_name: str) -> str:
-        info = self.agents[agent_name]
-        territories = ", ".join(self.territories_of(agent_name)) or "none"
-        lines = [
-            f"Turn {self.turn}. You are {agent_name}.",
-            (
-                f"Your status: resources={int(info['resources'])}, "
-                f"location={info['location']}, territories=[{territories}]."
-            ),
-        ]
-        others = []
-        for other in self.agents:
-            if other == agent_name:
-                continue
-            oinfo = self.agents[other]
-            status = "alive" if oinfo["alive"] else "eliminated"
-            oterr = ", ".join(self.territories_of(other)) or "none"
-            others.append(
-                f"{other} [{status}] resources={int(oinfo['resources'])}, "
-                f"territories=[{oterr}], relation={int(self.relation(agent_name, other))}"
-            )
-        lines.append("Other powers: " + "; ".join(others))
-        neutral = [loc for loc, owner in self.locations.items() if owner is None]
-        lines.append("Neutral locations: " + (", ".join(neutral) or "none"))
-        if self.history:
-            recent = self.history[-5:]
-            events = "; ".join(
-                f"T{e['turn']} {e['actor']} {e['action']} -> {e['result']}"
-                for e in recent
-            )
-            lines.append("Recent events: " + events)
-        return "\n".join(lines)
+    # -------------------------------------------------------------- objectives
+    def register_goals(self, agent_name: str, checks: dict[str, Callable]) -> None:
+        self.goal_checks[agent_name] = checks
 
     def goal_completion(self, agent_name: str) -> float:
         checks = self.goal_checks.get(agent_name, {})
@@ -326,14 +412,9 @@ class World:
         return total
 
     def score(self, agent_name: str) -> float:
-        info = self.agents[agent_name]
-        if not info["alive"]:
+        if not self.agents[agent_name]["alive"]:
             return 0.0
-        return (
-            info["resources"]
-            + len(self.territories_of(agent_name)) * TERRITORY_WEIGHT
-            + self.goal_completion(agent_name) * GOAL_WEIGHT
-        )
+        return self.resources_total(agent_name) + self.goal_completion(agent_name) * GOAL_WEIGHT
 
     def rankings(self) -> list[tuple[str, float]]:
         return sorted(
@@ -342,20 +423,151 @@ class World:
             reverse=True,
         )
 
+    def check_end_conditions(self) -> tuple[bool, Optional[str]]:
+        alive = self.living_agents()
+        if len(alive) <= 1:
+            winner = alive[0] if alive else None
+            return True, winner
+        return False, None
+
+    # ------------------------------------------------------------------ render
+    def _describe_tile(self, tile: Tile) -> str:
+        owner = tile.owner or "unowned"
+        if tile.is_city:
+            return (
+                f"{tile.city_name} (city, owner={tile.owner or 'neutral'}, "
+                f"res={int(tile.resources)})"
+            )
+        return f"({tile.q},{tile.r}) land res={int(tile.resources)} owner={owner}"
+
+    def _unit_neighbourhood(self, unit: Unit) -> str:
+        parts = []
+        for direction, tile in self.adjacent(unit.tile).items():
+            parts.append(f"{direction}: {self._describe_tile(tile)}")
+        location = unit.tile.city_name or f"({unit.tile.q},{unit.tile.r})"
+        return (
+            f"{unit.id} at {location} (res={int(unit.resources)}, AP={unit.ap}) | "
+            + " | ".join(parts)
+        )
+
+    def _route_hints(self, unit: Unit) -> str:
+        targets = [
+            (name, tile, hex_distance(unit.tile.coords, tile.coords))
+            for name, tile in self.cities.items()
+            if tile.owner != unit.owner
+        ]
+        targets.sort(key=lambda item: item[2])
+        hints = [
+            f"{name} ({direction_toward(unit.tile.coords, tile.coords)}, d{distance})"
+            for name, tile, distance in targets[:3]
+        ]
+        return f"{unit.id} -> " + "; ".join(hints) if hints else ""
+
+    def get_observation(self, agent_name: str) -> str:
+        info = self.agents[agent_name]
+        lines = [f"Turn {self.turn}. You are {agent_name}."]
+        if not info["alive"]:
+            lines.append("You have been eliminated.")
+            return "\n".join(lines)
+
+        cities = self.cities_of(agent_name)
+        units = self.units_of(agent_name)
+        lines.append(
+            f"Controlled resources (used for scoring): "
+            f"{int(self.resources_total(agent_name))} "
+            f"({int(sum(c.resources for c in cities))} in cities, "
+            f"{int(sum(u.resources for u in units))} in units)."
+        )
+        lines.append(f"Your cities ({len(cities)}):")
+        for tile in cities:
+            lines.append(
+                f"- {tile.city_name} at ({tile.q},{tile.r}): "
+                f"resources={int(tile.resources)}"
+            )
+        lines.append(f"Your units ({len(units)}), each gets 2 action points per turn:")
+        if units:
+            for unit in units:
+                location = unit.tile.city_name or f"({unit.tile.q},{unit.tile.r})"
+                lines.append(
+                    f"- {unit.id} at {location}: resources={int(unit.resources)}, "
+                    f"AP={unit.ap}"
+                )
+        else:
+            lines.append("- (none)")
+
+        cap = len(cities)
+        used = self.spawns_this_turn.get(agent_name, 0)
+        lines.append(
+            f"Unit creation this turn: {used}/{cap} used "
+            f"(max = number of cities you control). New units act immediately."
+        )
+
+        lines.append("All cities on the board:")
+        for name, tile in sorted(self.cities.items()):
+            lines.append(
+                f"- {name} at ({tile.q},{tile.r}): owner={tile.owner or 'neutral'}, "
+                f"resources={int(tile.resources)}"
+            )
+
+        if units:
+            lines.append("Unit surroundings and routes (N/NE/SE/S/SW/NW):")
+            for unit in units:
+                lines.append("- " + self._unit_neighbourhood(unit))
+                hint = self._route_hints(unit)
+                if hint:
+                    lines.append("  " + hint)
+
+        if self.history:
+            lines.append("Recent events:")
+            for event in self.history[-8:]:
+                target = f" {event['target']}" if event["target"] else ""
+                lines.append(
+                    f"- T{event['turn']} {event['actor']} {event['action']}{target}"
+                )
+        return "\n".join(lines)
+
     def snapshot(self) -> dict:
         return {
             "turn": self.turn,
-            "locations": {
-                loc: (owner if owner is not None else "Neutral")
-                for loc, owner in self.locations.items()
-            },
+            "tiles": [
+                {
+                    "q": tile.q,
+                    "r": tile.r,
+                    "resources": int(tile.resources),
+                    "owner": tile.owner,
+                    "is_city": tile.is_city,
+                    "city": tile.city_name,
+                }
+                for tile in self.tiles.values()
+            ],
+            "cities": [
+                {
+                    "name": tile.city_name,
+                    "q": tile.q,
+                    "r": tile.r,
+                    "owner": tile.owner,
+                    "resources": int(tile.resources),
+                }
+                for tile in sorted(self.cities.values(), key=lambda t: t.city_name)
+            ],
+            "units": [
+                {
+                    "id": unit.id,
+                    "owner": unit.owner,
+                    "q": unit.tile.q,
+                    "r": unit.tile.r,
+                    "resources": int(unit.resources),
+                    "ap": unit.ap,
+                }
+                for unit in self.units.values()
+            ],
             "agents": {
                 name: {
-                    "resources": int(info["resources"]),
                     "alive": info["alive"],
-                    "location": info["location"],
-                    "home": info["home"],
-                    "territories": self.territories_of(name),
+                    "home": info.get("home"),
+                    "resources_total": int(self.resources_total(name)),
+                    "cities": [c.city_name for c in self.cities_of(name)],
+                    "unit_count": self.unit_count(name),
                 }
                 for name, info in self.agents.items()
             },
@@ -367,10 +579,3 @@ class World:
                 name: round(self.goal_completion(name), 3) for name in self.agents
             },
         }
-
-    def check_end_conditions(self) -> tuple[bool, Optional[str]]:
-        alive = self.living_agents()
-        if len(alive) <= 1:
-            winner = alive[0] if alive else None
-            return True, winner
-        return False, None

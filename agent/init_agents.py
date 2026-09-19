@@ -75,38 +75,34 @@ def _clamp(value, low=0.0, high=1.0):
 
 def _germany_checks(world, name):
     return {
-        "primary": lambda w, n: _clamp(
-            (len(w.territories_of("Germany")) - w.initial_territories["Germany"]) / 2.0
-        ),
+        "primary": lambda w, n: _clamp(w.city_count("Germany") / 4.0),
         "secondary": lambda w, n: 1.0 if w.war_count("Germany") < 2 else 0.0,
-        "tertiary": lambda w, n: _clamp(w.resources("Germany") / 100.0),
+        "tertiary": lambda w, n: _clamp(w.resources_total("Germany") / 250.0),
     }
 
 
 def _france_checks(world, name):
     return {
-        "primary": lambda w, n: 1.0 if w.locations.get("Paris") == "France" else 0.0,
-        "secondary": lambda w, n: 1.0
-        - _clamp(
-            (len(w.territories_of("Germany")) - w.initial_territories["Germany"]) / 2.0
-        ),
-        "tertiary": lambda w, n: _clamp(
-            (w.relation("France", "United Kingdom") + 100.0) / 200.0
-        ),
+        "primary": lambda w, n: 1.0 if w.cities["Paris"].owner == "France" else 0.0,
+        "secondary": lambda w, n: 1.0 - _clamp(w.city_count("Germany") / 5.0),
+        "tertiary": lambda w, n: _clamp(w.resources_total("France") / 250.0),
     }
 
 
 def _uk_checks(world, name):
-    def domination_ratio(w):
-        counts = [len(w.territories_of(a)) for a in w.agents]
+    def domination(w):
+        counts = [w.city_count(a) for a in w.agents]
         maximum = max(counts) if counts else 0
         average = sum(counts) / len(counts) if counts else 0
         return maximum, average
 
     return {
-        "primary": lambda w, n: 1.0 - _clamp((domination_ratio(w)[0] - domination_ratio(w)[1]) / 3.0),
-        "secondary": lambda w, n: 1.0 - _clamp(domination_ratio(w)[0] / 4.0),
-        "tertiary": lambda w, n: _clamp(w.resources("United Kingdom") / 90.0),
+        "primary": lambda w, n: 1.0
+        - _clamp((domination(w)[0] - domination(w)[1]) / 4.0),
+        "secondary": lambda w, n: _clamp(w.resources_total("United Kingdom") / 250.0),
+        "tertiary": lambda w, n: 1.0
+        if w.cities["London"].owner == "United Kingdom"
+        else 0.0,
     }
 
 
@@ -118,9 +114,9 @@ NATIONS = {
             weakness="Can't sustain long-term war because of limited resources",
         ),
         "goals": get_goals(
-            primary="Expand territory",
-            secondary="Avoid multi front war",
-            tertiary="Maintain strong economy",
+            primary="Control the most cities in Europe",
+            secondary="Avoid fighting on two fronts",
+            tertiary="Build a strong economy",
         ),
         "checks": _germany_checks,
     },
@@ -131,9 +127,9 @@ NATIONS = {
             weakness="Political divisions and reluctance to start offensive wars",
         ),
         "goals": get_goals(
-            primary="Preserve national sovereignty",
+            primary="Keep Paris under French control",
             secondary="Prevent German expansion",
-            tertiary="Maintain alliance stability",
+            tertiary="Accumulate resources",
         ),
         "checks": _france_checks,
     },
@@ -144,9 +140,9 @@ NATIONS = {
             weakness="Limited willingness for large land wars in Europe",
         ),
         "goals": get_goals(
-            primary="Maintain balance of power in Europe",
-            secondary="Prevent domination of the continent by any single power",
-            tertiary="Protect global trade and colonies",
+            primary="Maintain the balance of power in Europe",
+            secondary="Build a strong economy",
+            tertiary="Keep London secure",
         ),
         "checks": _uk_checks,
     },

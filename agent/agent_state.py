@@ -12,6 +12,7 @@ class AgentState(TypedDict, total=False):
     reflections: List[str]
     plan: str
     action: Optional[dict]
+    actions: Optional[List[dict]]
     result: Optional[str]
     messages: Annotated[list[AnyMessage], add_messages]
     llm_calls: int

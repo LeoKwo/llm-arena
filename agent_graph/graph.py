@@ -1,6 +1,3 @@
-import json
-import re
-
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, ToolMessage
 from langgraph.graph import StateGraph, START, END
 from langgraph.prebuilt import ToolNode
@@ -10,7 +7,7 @@ from agent.goals import format_goals
 from agent.prompt import get_prompt, language_instruction
 from agent.tools import make_tools
 
-MAX_LLM_CALLS = 4
+MAX_LLM_CALLS = 20
 REFLECT_EVERY = 3
 REFLECT_MIN_MEMORIES = 6
 
@@ -27,24 +24,6 @@ def _text(content):
                 parts.append(str(item))
         return "".join(parts)
     return str(content)
-
-
-def _parse_action_from_text(content):
-    text = _text(content)
-    match = re.search(r"\{.*\}", text, re.DOTALL)
-    if not match:
-        return None
-    try:
-        data = json.loads(match.group(0))
-    except Exception:
-        return None
-    action = data.get("action") or data.get("name")
-    if not action:
-        return None
-    args = data.get("args") or data.get("arguments") or {}
-    if not isinstance(args, dict):
-        args = {}
-    return {"action": str(action).lower(), "args": args}
 
 
 def build_agent_graph(
@@ -126,10 +105,12 @@ def build_agent_graph(
             f"Situation:\n{state.get('observation', '')}\n\n"
             f"Plan for this turn: {state.get('plan', '')}\n\n"
             "Relevant memories:\n" + "\n".join(state.get("memory_context", [])) + "\n\n"
-            "Choose exactly ONE action using the available tools. "
-            "Provide a short reason." + lang_suffix
+            "Issue one or more actions using the available tools, then call "
+            "end_turn when you are done. Units have 2 action points each; you "
+            "may create new units and command them in the same turn." + lang_suffix
         )
-        messages = [SystemMessage(content=system), HumanMessage(content=context)]
+        history = list(state.get("messages", []))
+        messages = [SystemMessage(content=system), HumanMessage(content=context)] + history
         emit_think("act", "start", "", turn)
         full = None
         for chunk in llm_with_tools.stream(messages):
@@ -143,11 +124,18 @@ def build_agent_graph(
         return {"messages": [full], "llm_calls": state.get("llm_calls", 0) + 1}
 
     def route_after_act(state):
-        last = state["messages"][-1]
+        messages = state.get("messages", [])
+        if not messages:
+            return "collect"
+        last = messages[-1]
         calls = getattr(last, "tool_calls", None)
-        if calls and state.get("llm_calls", 0) <= MAX_LLM_CALLS:
-            return "tools"
-        return "collect"
+        if not calls:
+            return "collect"
+        if any(call.get("name") == "end_turn" for call in calls):
+            return "collect"
+        if state.get("llm_calls", 0) >= MAX_LLM_CALLS:
+            return "collect"
+        return "tools"
 
     def route_after_observe(state):
         turn = state.get("turn", 0)
@@ -161,36 +149,32 @@ def build_agent_graph(
 
     def collect_node(state):
         messages = state.get("messages", [])
-        action = None
-        result = None
-        for message in reversed(messages):
-            if isinstance(message, ToolMessage) and result is None:
-                result = _text(message.content)
-        for message in reversed(messages):
-            if isinstance(message, AIMessage):
-                calls = getattr(message, "tool_calls", None)
-                if calls:
-                    call = calls[0]
-                    action = {
-                        "action": call.get("name"),
-                        "args": call.get("args", {}),
-                        "reason": call.get("args", {}).get("reason", ""),
+        results_by_id = {}
+        for message in messages:
+            if isinstance(message, ToolMessage):
+                results_by_id[message.tool_call_id] = _text(message.content)
+
+        actions = []
+        for message in messages:
+            if not isinstance(message, AIMessage):
+                continue
+            for call in getattr(message, "tool_calls", None) or []:
+                tool_name = call.get("name")
+                if tool_name == "end_turn":
+                    continue
+                args = call.get("args", {}) or {}
+                actions.append(
+                    {
+                        "action": tool_name,
+                        "args": args,
+                        "reason": args.get("reason", ""),
+                        "result": results_by_id.get(call.get("id"), ""),
                     }
-                    break
-                parsed = _parse_action_from_text(message.content)
-                if parsed is not None:
-                    action = parsed
-                    action["reason"] = action.get("args", {}).get("reason", "")
-                    break
-        if action is None:
-            action = {
-                "action": "wait",
-                "args": {"reason": "no valid action"},
-                "reason": "no valid action",
-            }
-        if verbose:
-            print(f"  [{name}] action={action} result={result}", flush=True)
-        return {"action": action, "result": result}
+                )
+        if not actions:
+            return {"actions": [], "action": None, "result": None}
+        last = actions[-1]
+        return {"actions": actions, "action": last, "result": last.get("result")}
 
     builder = StateGraph(AgentState)
     builder.add_node("observe", observe_node)
@@ -209,7 +193,7 @@ def build_agent_graph(
     builder.add_conditional_edges(
         "act", route_after_act, {"tools": "tools", "collect": "collect"}
     )
-    builder.add_edge("tools", "collect")
+    builder.add_edge("tools", "act")
     builder.add_edge("collect", END)
 
     return builder.compile()
