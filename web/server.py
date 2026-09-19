@@ -166,6 +166,10 @@ async def run_simulation(request: Request):
     except ValueError as exc:
         return _error_stream(str(exc))
 
+    lang = (params.get("lang") or "en").strip().lower()
+    if lang not in {"en", "zh"}:
+        lang = "en"
+
     if not _run_lock.acquire(blocking=False):
         return _error_stream("A simulation is already running.")
 
@@ -180,6 +184,7 @@ async def run_simulation(request: Request):
                 on_event=lambda event: events.put(event),
                 model_config=model_config,
                 should_stop=_stop_event.is_set,
+                lang=lang,
             )
         except Exception as exc:
             events.put({"type": "error", "message": f"{type(exc).__name__}: {exc}"})

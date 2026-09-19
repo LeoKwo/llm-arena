@@ -7,7 +7,7 @@ from langgraph.prebuilt import ToolNode
 
 from agent.agent_state import AgentState
 from agent.goals import format_goals
-from agent.prompt import get_prompt
+from agent.prompt import get_prompt, language_instruction
 from agent.tools import make_tools
 
 MAX_LLM_CALLS = 4
@@ -48,10 +48,12 @@ def _parse_action_from_text(content):
 
 
 def build_agent_graph(
-    name, persona, goals, llm, world, memory, verbose=False, on_event=None
+    name, persona, goals, llm, world, memory, verbose=False, on_event=None, lang="en"
 ):
     tools = make_tools(world, name)
     llm_with_tools = llm.bind_tools(tools) if tools else llm
+    _lang_extra = language_instruction(lang)
+    lang_suffix = ("\n\n" + _lang_extra) if _lang_extra else ""
 
     def emit_think(node, phase, text, turn):
         if on_event is not None:
@@ -97,7 +99,7 @@ def build_agent_graph(
             f"Goals:\n{format_goals(goals)}\n\n"
             f"Recent memories:\n" + "\n".join(recent) + "\n\n"
             "Write a concise strategic reflection (3-4 sentences) about your "
-            "position, mistakes, and what you should do next."
+            "position, mistakes, and what you should do next." + lang_suffix
         )
         reflection = stream_text(prompt, "reflect", turn)
         memory.add_reflection(reflection)
@@ -113,19 +115,19 @@ def build_agent_graph(
             f"Current situation:\n{state.get('observation', '')}\n\n"
             "Reflections:\n" + "\n".join(state.get("reflections", [])) + "\n\n"
             "Relevant memories:\n" + "\n".join(state.get("memory_context", [])) + "\n\n"
-            "State a short plan (1-2 sentences) for this turn."
+            "State a short plan (1-2 sentences) for this turn." + lang_suffix
         )
         return {"plan": stream_text(prompt, "plan", turn)}
 
     def act_node(state):
         turn = state.get("turn", 0)
-        system = get_prompt(name, persona, goals)
+        system = get_prompt(name, persona, goals, lang)
         context = (
             f"Situation:\n{state.get('observation', '')}\n\n"
             f"Plan for this turn: {state.get('plan', '')}\n\n"
             "Relevant memories:\n" + "\n".join(state.get("memory_context", [])) + "\n\n"
             "Choose exactly ONE action using the available tools. "
-            "Provide a short reason."
+            "Provide a short reason." + lang_suffix
         )
         messages = [SystemMessage(content=system), HumanMessage(content=context)]
         emit_think("act", "start", "", turn)

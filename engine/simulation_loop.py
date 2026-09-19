@@ -58,7 +58,14 @@ def nation_metadata(model_config=None):
     return metadata
 
 
-def run(max_turns=MAX_TURNS, verbose=True, on_event=None, model_config=None, should_stop=None):
+def run(
+    max_turns=MAX_TURNS,
+    verbose=True,
+    on_event=None,
+    model_config=None,
+    should_stop=None,
+    lang="en",
+):
     def emit(event):
         if on_event is not None:
             on_event(event)
@@ -77,6 +84,7 @@ def run(max_turns=MAX_TURNS, verbose=True, on_event=None, model_config=None, sho
             model_config=model_config,
             verbose=False,
             on_event=on_event,
+            lang=lang,
         )
         carry = {name: [] for name in agents}
 

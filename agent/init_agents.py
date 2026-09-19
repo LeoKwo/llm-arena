@@ -153,7 +153,14 @@ NATIONS = {
 }
 
 
-def build_all_agents(world, embeddings, model_config=None, verbose=False, on_event=None):
+def build_all_agents(
+    world,
+    embeddings,
+    model_config=None,
+    verbose=False,
+    on_event=None,
+    lang="en",
+):
     config_map = model_config or default_model_config()
     agents = {}
     for name, config in NATIONS.items():
@@ -177,6 +184,7 @@ def build_all_agents(world, embeddings, model_config=None, verbose=False, on_eve
             memory=memory,
             verbose=verbose,
             on_event=on_event,
+            lang=lang,
         )
         agents[name] = {
             "graph": graph,
