@@ -1,0 +1,13 @@
+faiss-cpu==1.13.2
+fastapi==0.141.1
+langchain==1.2.12
+langchain-community==0.4.1
+langchain-core==1.6.3
+langchain-ollama==1.0.1
+langchain-openai==1.6.2
+langgraph==1.1.2
+langgraph-prebuilt==1.0.8
+numpy==2.4.3
+ollama==0.6.1
+openai==3.16.2
+uvicorn==0.53.0

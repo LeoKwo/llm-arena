@@ -1,58 +1,62 @@
 from langchain.tools import tool
 
-@tool
-def observe(state: dict):
-    """
-    Observe an agent, location, or object.
 
-    Args:
-        target: The object or agent to observe
-        reason: Why the agent is observing
-    """
-    # Here you could query environment state
-    return f"Observed {target}. Reason: {reason}"
+def make_tools(world, agent_name):
+    @tool
+    def observe(target: str = "", reason: str = "") -> str:
+        """Observe another power, a location, or the whole world.
 
-@tool
-def move(state: dict):
-    """
-    Move the agent to a location or position.
+        Args:
+            target: The power or location to observe (empty = whole world)
+            reason: Why you are observing
+        """
+        return world.apply_action(
+            agent_name, "observe", target=target or None, reason=reason
+        )
 
-    Args:
-        target: Destination location
-        reason: Why the agent is moving
-    """
-    return f"Moved to {target}. Reason: {reason}"
+    @tool
+    def move(target: str, reason: str = "") -> str:
+        """Move your forces to a friendly or neutral location.
 
-@tool
-def interact(state: dict):
-    """
-    Interact with another agent or object.
+        Args:
+            target: Destination location name
+            reason: Why you are moving
+        """
+        return world.apply_action(agent_name, "move", target=target, reason=reason)
 
-    Args:
-        target: The agent or object to interact with
-        method: The type of interaction (talk, trade, threaten, etc.)
-        reason: Why this interaction is happening
-    """
-    return f"Interacted with {target} via {method}. Reason: {reason}"
+    @tool
+    def interact(target: str, method: str = "talk", reason: str = "") -> str:
+        """Interact with another power.
 
-@tool
-def attack(state: dict):
-    """
-    Attack a target agent or location.
+        Args:
+            target: The power to interact with
+            method: One of talk, trade, threaten, ally
+            reason: Why you are interacting
+        """
+        return world.apply_action(
+            agent_name, "interact", target=target, method=method, reason=reason
+        )
 
-    Args:
-        target: The target of the attack
-        method: Attack method (direct, ambush, sabotage)
-        reason: Strategic reason for attack
-    """
-    return f"Attacked {target} via {method}. Reason: {reason}"
+    @tool
+    def attack(target: str, method: str = "direct", reason: str = "") -> str:
+        """Attack an enemy power or contest a location.
 
-@tool
-def wait(state: dict):
-    """
-    Wait / skip turn.
+        Args:
+            target: The power or location to attack
+            method: Attack method (direct, ambush, sabotage)
+            reason: Strategic reason for attacking
+        """
+        return world.apply_action(
+            agent_name, "attack", target=target, method=method, reason=reason
+        )
 
-    Args:
-        reason: Why the agent is waiting
-    """
-    return f"Waiting. Reason: {reason}"
+    @tool
+    def wait(reason: str = "") -> str:
+        """Wait this turn to regroup and regenerate resources.
+
+        Args:
+            reason: Why you are waiting
+        """
+        return world.apply_action(agent_name, "wait", reason=reason)
+
+    return [observe, move, interact, attack, wait]

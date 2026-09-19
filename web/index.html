@@ -1,0 +1,611 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>LLM Arena</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #171a21;
+    --panel-2: #1e222b;
+    --border: #2a2f3a;
+    --text: #e7e9ee;
+    --muted: #8b93a5;
+    --accent: #6ea8fe;
+    --danger: #ff6b6b;
+    --ok: #4ade80;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 14px;
+  }
+  header {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 12px 20px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    position: sticky;
+    top: 0;
+    z-index: 10;
+  }
+  header h1 { font-size: 16px; margin: 0; letter-spacing: 0.5px; }
+  .turn-badge {
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 4px 10px;
+    font-variant-numeric: tabular-nums;
+  }
+  .status { color: var(--muted); }
+  .status.running { color: var(--accent); }
+  .status.done { color: var(--ok); }
+  .status.error { color: var(--danger); }
+  header .spacer { flex: 1; }
+  input[type="number"] {
+    width: 64px;
+    background: var(--panel-2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 6px 8px;
+  }
+  button {
+    background: var(--accent);
+    color: #0b1220;
+    border: 0;
+    border-radius: 6px;
+    padding: 7px 16px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  button:disabled { opacity: 0.5; cursor: default; }
+  button.btn-stop { background: var(--danger); color: #fff; }
+  main {
+    display: grid;
+    grid-template-columns: minmax(420px, 1fr) minmax(360px, 460px);
+    gap: 16px;
+    padding: 16px 20px;
+    align-items: start;
+  }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px;
+  }
+  .panel h2 {
+    margin: 0 0 10px;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--muted);
+  }
+  .toggle-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .toggle { display: flex; align-items: center; gap: 8px; cursor: pointer; user-select: none; }
+  .toggle input { width: 16px; height: 16px; accent-color: var(--accent); }
+  .hint { color: var(--muted); font-size: 12px; }
+  .model-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: 12px; }
+  .model-cell { background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; padding: 10px; }
+  .model-cell label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+  .model-cell .nation-name { font-weight: 700; color: var(--text); }
+  select {
+    width: 100%;
+    background: #0b0e13;
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 6px 8px;
+  }
+  .keywarn { color: var(--danger); font-size: 12px; margin-top: 8px; min-height: 16px; }
+  .nations { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: 12px; }
+  .nation {
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-top: 3px solid var(--nc, var(--accent));
+    border-radius: 8px;
+    padding: 12px;
+    transition: box-shadow 0.2s, transform 0.2s;
+  }
+  .nation.thinking { box-shadow: 0 0 0 2px var(--nc, var(--accent)); animation: pulse 1.2s infinite; }
+  .nation.eliminated { opacity: 0.45; filter: grayscale(0.6); }
+  @keyframes pulse { 50% { box-shadow: 0 0 0 2px transparent; } }
+  .nation .name { font-weight: 700; }
+  .nation .model { color: var(--muted); font-size: 11px; margin-top: 2px; }
+  .stat { display: flex; justify-content: space-between; margin-top: 8px; font-size: 12px; }
+  .bar { height: 6px; background: #0b0e13; border-radius: 4px; overflow: hidden; margin-top: 4px; }
+  .bar > span { display: block; height: 100%; background: var(--nc, var(--accent)); }
+  .terr { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
+  .chip {
+    font-size: 11px;
+    padding: 2px 7px;
+    border-radius: 10px;
+    background: #0b0e13;
+    border: 1px solid var(--border);
+  }
+  .goals { margin-top: 8px; font-size: 11px; color: var(--muted); }
+  .goals li { margin: 2px 0; }
+  .map { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 4px; }
+  .loc {
+    border-radius: 8px;
+    padding: 12px 8px;
+    text-align: center;
+    border: 1px solid var(--border);
+    background: #0b0e13;
+    font-weight: 600;
+  }
+  .loc .owner { display: block; font-size: 11px; font-weight: 400; margin-top: 2px; }
+  .relations { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-top: 10px; }
+  .rel { background: #0b0e13; border: 1px solid var(--border); border-radius: 6px; padding: 6px; text-align: center; font-size: 11px; }
+  .rel b { display: block; font-size: 13px; }
+  .log {
+    height: calc(100vh - 130px);
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .entry {
+    border-left: 3px solid var(--border);
+    padding: 6px 10px;
+    background: var(--panel-2);
+    border-radius: 0 6px 6px 0;
+    font-size: 13px;
+  }
+  .entry .head { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+  .entry .who { font-weight: 700; }
+  .entry .prov { color: var(--muted); font-size: 11px; }
+  .entry .act { color: var(--accent); font-weight: 600; }
+  .entry .res { color: var(--muted); margin-top: 2px; }
+  .entry .detail { color: var(--muted); font-size: 12px; margin-top: 4px; white-space: pre-wrap; }
+  .entry.turn { border-left-color: var(--accent); font-weight: 700; }
+  .entry.system { border-left-color: var(--ok); }
+  .entry.error { border-left-color: var(--danger); color: var(--danger); }
+  .think {
+    border-left: 3px solid var(--border);
+    background: #12151b;
+    border-radius: 0 6px 6px 0;
+    padding: 4px 10px;
+  }
+  .think > summary {
+    cursor: pointer;
+    color: var(--muted);
+    font-size: 12px;
+    list-style: none;
+    display: flex;
+    gap: 8px;
+    align-items: center;
+  }
+  .think > summary::-webkit-details-marker { display: none; }
+  .think .who { font-weight: 700; }
+  .think .dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--ok); display: inline-block;
+    animation: pulse 1.2s infinite;
+  }
+  .think .count { margin-left: auto; color: var(--muted); }
+  .think .think-body {
+    white-space: pre-wrap;
+    font-size: 12px;
+    color: #c8cede;
+    margin-top: 6px;
+    max-height: 260px;
+    overflow: auto;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  .final { text-align: center; }
+  .final .winner { font-size: 22px; font-weight: 800; margin: 6px 0; }
+</style>
+</head>
+<body>
+<header>
+  <h1>LLM Arena</h1>
+  <div class="turn-badge">Turn <span id="turn">-</span></div>
+  <div id="status" class="status">idle</div>
+  <div class="spacer"></div>
+  <label>Max turns <input id="maxturns" type="number" value="10" min="1" max="100" /></label>
+  <button id="start">Start</button>
+  <button id="stop" class="btn-stop" disabled>Interrupt</button>
+</header>
+
+<main>
+  <section>
+    <div class="panel">
+      <h2>Models</h2>
+      <div class="toggle-row">
+        <label class="toggle">
+          <input type="checkbox" id="useapi" />
+          Use API models
+        </label>
+        <span class="hint" id="modeltogglehint">Off = local Ollama models. On = cloud API providers.</span>
+      </div>
+      <div class="model-grid" id="modelgrid"></div>
+      <div class="keywarn" id="keywarn"></div>
+    </div>
+
+    <div class="panel" style="margin-top:16px">
+      <h2>Nations</h2>
+      <div class="nations" id="nations"></div>
+    </div>
+    <div class="panel" style="margin-top:16px">
+      <h2>World Map</h2>
+      <div class="map" id="map"></div>
+      <h2 style="margin-top:14px">Relations</h2>
+      <div class="relations" id="relations"></div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>Live Feed</h2>
+    <div class="log" id="log"></div>
+  </section>
+</main>
+
+<script>
+const PALETTE = ["#e06c75", "#61afef", "#98c379", "#e5c07b", "#c678dd", "#56b6c2"];
+const NATION_COLORS = {};
+const SLUGS = [["germany", "Germany"], ["france", "France"], ["uk", "United Kingdom"]];
+let providerInfo = null;
+let localDefaults = {};
+let apiDefaults = {};
+let source = null;
+const nationEls = {};
+const liveThink = {};
+let scrollPending = false;
+
+const el = (id) => document.getElementById(id);
+
+function colorFor(name) {
+  if (!NATION_COLORS[name]) {
+    NATION_COLORS[name] = PALETTE[Object.keys(NATION_COLORS).length % PALETTE.length];
+  }
+  return NATION_COLORS[name];
+}
+
+function setStatus(text, cls) {
+  const s = el("status");
+  s.textContent = text;
+  s.className = "status " + (cls || "");
+}
+
+function setRunning(running) {
+  el("start").disabled = running;
+  el("stop").disabled = !running;
+}
+
+function clearLog() {
+  el("log").innerHTML = "";
+  Object.keys(liveThink).forEach((k) => delete liveThink[k]);
+}
+
+function log(html, cls) {
+  const div = document.createElement("div");
+  div.className = "entry " + (cls || "");
+  div.innerHTML = html;
+  const box = el("log");
+  box.appendChild(div);
+  scrollLog();
+}
+
+const NODE_LABELS = { plan: "planning", reflect: "reflecting", act: "acting" };
+
+function scrollLog() {
+  if (scrollPending) return;
+  scrollPending = true;
+  requestAnimationFrame(() => {
+    const box = el("log");
+    box.scrollTop = box.scrollHeight;
+    scrollPending = false;
+  });
+}
+
+function startThink(agent, node) {
+  const key = agent + "|" + node;
+  const color = colorFor(agent);
+  const details = document.createElement("details");
+  details.className = "think";
+  details.open = true;
+  const label = NODE_LABELS[node] || node;
+  details.innerHTML =
+    `<summary><span class="dot"></span>` +
+    `<span class="who" style="color:${color}">${agent}</span>` +
+    `<span>${label}...</span><span class="count"></span></summary>` +
+    `<div class="think-body"></div>`;
+  el("log").appendChild(details);
+  const obj = {
+    root: details,
+    body: details.querySelector(".think-body"),
+    summary: details.querySelector("summary"),
+    count: details.querySelector(".count"),
+    node,
+    text: "",
+  };
+  liveThink[key] = obj;
+  scrollLog();
+  return obj;
+}
+
+function appendThink(agent, node, text) {
+  const key = agent + "|" + node;
+  let obj = liveThink[key];
+  if (!obj) obj = startThink(agent, node);
+  obj.text += text;
+  obj.body.textContent += text;
+  obj.count.textContent = obj.text.length + " chars";
+  scrollLog();
+}
+
+function endThink(agent, node) {
+  const key = agent + "|" + node;
+  const obj = liveThink[key];
+  if (!obj) return;
+  delete liveThink[key];
+  if (obj.text.trim().length === 0) {
+    obj.root.remove();
+    return;
+  }
+  obj.root.open = false;
+  const label = NODE_LABELS[node] || node;
+  obj.summary.innerHTML =
+    `<span class="who" style="color:${colorFor(agent)}">${agent}</span>` +
+    `<span>${label} (${obj.text.length} chars)</span>`;
+}
+
+async function loadProviders() {
+  try {
+    const data = await (await fetch("/api/providers")).json();
+    providerInfo = data.providers;
+    localDefaults = data.defaults.local || {};
+    apiDefaults = data.defaults.api || {};
+  } catch (err) {
+    providerInfo = { ollama: { label: "Local (Ollama)", configured: true } };
+  }
+  buildModelGrid();
+  updateKeyWarning();
+}
+
+function optionList(selected) {
+  return Object.entries(providerInfo).map(([key, info]) => {
+    const label = info.label + (info.configured === false ? " — key missing" : "");
+    return `<option value="${key}" ${key === selected ? "selected" : ""}>${label}</option>`;
+  }).join("");
+}
+
+function buildModelGrid() {
+  const grid = el("modelgrid");
+  grid.innerHTML = "";
+  SLUGS.forEach(([slug, nation]) => {
+    const cell = document.createElement("div");
+    cell.className = "model-cell";
+    cell.innerHTML = `<label><span class="nation-name">${nation}</span></label>
+      <select id="sel-${slug}" data-slug="${slug}"></select>`;
+    grid.appendChild(cell);
+    const select = cell.querySelector("select");
+    select.innerHTML = optionList("ollama");
+    select.addEventListener("change", updateKeyWarning);
+  });
+  applyToggle();
+}
+
+function applyToggle() {
+  const useApi = el("useapi").checked;
+  SLUGS.forEach(([slug, nation]) => {
+    const select = el("sel-" + slug);
+    if (!select) return;
+    const value = useApi ? (apiDefaults[nation] || "qwen") : "ollama";
+    select.value = value;
+  });
+  el("modeltogglehint").textContent = useApi
+    ? "On = each nation can use a different cloud provider."
+    : "Off = local Ollama models. On = cloud API providers.";
+}
+
+function updateKeyWarning() {
+  if (!providerInfo) return;
+  const missing = [];
+  const seen = new Set();
+  SLUGS.forEach(([slug, nation]) => {
+    const select = el("sel-" + slug);
+    if (!select) return;
+    const key = select.value;
+    const info = providerInfo[key];
+    if (info && info.configured === false && !seen.has(key)) {
+      seen.add(key);
+      missing.push(`${info.label} (${nation})`);
+    }
+  });
+  el("keywarn").textContent = missing.length
+    ? "Missing API key for: " + missing.join(", ") + ". Set the env vars before running."
+    : "";
+}
+
+function renderNations(nations, world) {
+  const container = el("nations");
+  container.innerHTML = "";
+  Object.entries(nations).forEach(([name, meta]) => {
+    const color = colorFor(name);
+    const card = document.createElement("div");
+    card.className = "nation";
+    card.style.setProperty("--nc", color);
+    const goals = Object.entries(meta.goals || {})
+      .filter(([, v]) => v)
+      .map(([k, v]) => `<li><b>${k}:</b> ${v}</li>`)
+      .join("");
+    card.innerHTML = `
+      <div class="name">${name}</div>
+      <div class="model">${meta.provider || "ollama"} · ${meta.model}</div>
+      <div class="stat"><span>Resources</span><b data-f="resources">-</b></div>
+      <div class="bar"><span data-f="resbar" style="width:0%"></span></div>
+      <div class="stat"><span>Score</span><b data-f="score">0</b></div>
+      <div class="stat"><span>Goal progress</span><b data-f="goal">0%</b></div>
+      <div class="terr" data-f="terr"></div>
+      <ul class="goals">${goals}</ul>
+    `;
+    container.appendChild(card);
+    nationEls[name] = card;
+  });
+  if (world) updateWorld(world);
+}
+
+function updateWorld(world) {
+  el("turn").textContent = world.turn;
+  const maxRes = Math.max(100, ...Object.values(world.agents).map(a => a.resources));
+  Object.entries(world.agents).forEach(([name, a]) => {
+    const card = nationEls[name];
+    if (!card) return;
+    card.classList.toggle("eliminated", !a.alive);
+    card.querySelector('[data-f="resources"]').textContent = a.resources;
+    card.querySelector('[data-f="resbar"]').style.width = Math.min(100, (a.resources / maxRes) * 100) + "%";
+    card.querySelector('[data-f="score"]').textContent = Math.round(world.scores[name] || 0);
+    const goal = Math.round((world.goal_completion[name] || 0) * 100);
+    card.querySelector('[data-f="goal"]').textContent = goal + "%";
+    card.querySelector('[data-f="terr"]').innerHTML =
+      (a.territories || []).map(t => `<span class="chip">${t}</span>`).join("");
+  });
+  el("map").innerHTML = Object.entries(world.locations).map(([loc, owner]) => {
+    const color = owner === "Neutral" ? "#3a4150" : colorFor(owner);
+    return `<div class="loc" style="border-color:${color}">${loc}<span class="owner" style="color:${color}">${owner}</span></div>`;
+  }).join("");
+  const rel = world.relations || {};
+  const keys = Object.keys(rel);
+  el("relations").innerHTML = keys.length
+    ? keys.map(k => {
+        const [a, b] = k.split("|");
+        const v = rel[k];
+        const c = v < -20 ? "var(--danger)" : v > 20 ? "var(--ok)" : "var(--muted)";
+        return `<div class="rel">${a} / ${b}<b style="color:${c}">${v}</b></div>`;
+      }).join("")
+    : '<div class="rel" style="grid-column:1/-1">No interactions yet</div>';
+}
+
+function clearThinking() {
+  Object.values(nationEls).forEach(c => c.classList.remove("thinking"));
+}
+
+function handle(event) {
+  switch (event.type) {
+    case "init":
+      renderNations(event.nations, event.world);
+      setStatus("running", "running");
+      log(`Simulation started (max ${event.max_turns} turns).`, "system");
+      break;
+    case "turn_start":
+      clearThinking();
+      log(`Turn ${event.turn}`, "turn");
+      el("turn").textContent = event.turn;
+      break;
+    case "agent_thinking": {
+      const card = nationEls[event.agent];
+      if (card) card.classList.add("thinking");
+      break;
+    }
+    case "llm_start":
+      startThink(event.agent, event.node);
+      break;
+    case "llm_token":
+      appendThink(event.agent, event.node, event.text || "");
+      break;
+    case "llm_end":
+      endThink(event.agent, event.node);
+      break;
+    case "agent_action": {
+      clearThinking();
+      const color = colorFor(event.agent);
+      const a = event.action || {};
+      const args = a.args || {};
+      const shown = Object.entries(args)
+        .filter(([k]) => k !== "reason")
+        .map(([k, v]) => `${k}=${v}`)
+        .join(", ");
+      const reason = args.reason ? `<div class="res">reason: ${args.reason}</div>` : "";
+      log(
+        `<div class="head"><span class="who" style="color:${color}">${event.agent}</span>` +
+        `<span class="act">${a.action || "?"}</span></div>` +
+        (shown ? `<div class="res">${shown}</div>` : "") +
+        reason +
+        `<div class="res">${event.result || ""}</div>`,
+        ""
+      );
+      break;
+    }
+    case "world_state":
+      updateWorld(event.world);
+      break;
+    case "standings":
+      break;
+    case "interrupted": {
+      setStatus("interrupted", "done");
+      clearThinking();
+      log("Simulation interrupted by user.", "system");
+      if (source) { source.close(); source = null; }
+      setRunning(false);
+      break;
+    }
+    case "end": {
+      setStatus("finished", "done");
+      clearThinking();
+      const w = event.world;
+      const rows = event.rankings.map(([n, s]) =>
+        `<div>${n}: ${Math.round(s)} pts ${w.agents[n].alive ? "" : "(eliminated)"}</div>`
+      ).join("");
+      log(
+        `<div class="final"><div>Simulation ended</div>` +
+        `<div class="winner" style="color:${colorFor(event.winner)}">${event.winner || "No winner"}</div>` +
+        rows + `</div>`,
+        "system"
+      );
+      if (source) { source.close(); source = null; }
+      setRunning(false);
+      break;
+    }
+    case "error":
+      setStatus("error", "error");
+      log(event.message, "error");
+      if (source) { source.close(); source = null; }
+      setRunning(false);
+      break;
+  }
+}
+
+function start() {
+  if (source) return;
+  const maxTurns = parseInt(el("maxturns").value || "10", 10);
+  const params = new URLSearchParams({ max_turns: maxTurns });
+  SLUGS.forEach(([slug]) => {
+    const select = el("sel-" + slug);
+    params.set(slug, select ? select.value : "ollama");
+  });
+  clearLog();
+  setStatus("connecting...", "running");
+  setRunning(true);
+  source = new EventSource(`/api/run?${params.toString()}`);
+  source.onmessage = (e) => {
+    if (!e.data) return;
+    try { handle(JSON.parse(e.data)); } catch (err) { console.error(err, e.data); }
+  };
+  source.onerror = () => {
+    if (source && source.readyState === EventSource.CLOSED) return;
+  };
+}
+
+el("start").addEventListener("click", start);
+el("stop").addEventListener("click", async () => {
+  el("stop").disabled = true;
+  setStatus("stopping...", "running");
+  try {
+    await fetch("/api/stop");
+  } catch (err) {
+    console.error(err);
+  }
+});
+el("useapi").addEventListener("change", () => { applyToggle(); updateKeyWarning(); });
+loadProviders();
+</script>
+</body>
+</html>
