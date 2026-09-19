@@ -1,33 +1,34 @@
 from langchain_ollama.chat_models import ChatOllama
 from langchain.agents import create_agent
-from agent.actions import observe, move, interact, attack, wait
+from agent.tools import observe, move, interact, attack, wait
 
-qwen3_5 = ChatOllama(model="qwen3.5:latest", temperature=0.1)
-glm4 = ChatOllama(model="glm4:9b", temperature=0.1)
-ds_r1 = ChatOllama(model="deepseek-r1:latest", temperature=0.1)
 
-tools = [observe, move, interact, attack, wait]
+def get_base_agent(model):
+    return ChatOllama(model=model, temperature=0.1)
 
-def create_player_qwen3_5(player_prompt):
-    return create_agent(
-        model=qwen3_5,
-        tools=tools,
-        system_prompt=player_prompt
-    )
 
-def create_player_glm4(player_prompt):
-    return create_agent(
-        model=glm4,
-        tools=tools,
-        system_prompt=player_prompt
-    )
 
-def create_player_ds_r1(player_prompt):
-    return create_agent(
-        model=ds_r1,
-        tools=tools,
-        system_prompt=player_prompt
-    )
+# def create_player_qwen3_5(player_prompt):
+#     return create_agent(
+#         model=qwen3_5,
+#         tools=tools,
+#         system_prompt=player_prompt
+#     )
+
+# def create_player_glm4(player_prompt):
+#     return create_agent(
+#         model=glm4,
+#         tools=tools,
+#         system_prompt=player_prompt
+#     )
+
+# def create_player_ds_r1(player_prompt):
+#     return create_agent(
+#         model=ds_r1,
+#         tools=tools,
+#         system_prompt=player_prompt
+#     )
+
 
 
 # class BaseAgent:

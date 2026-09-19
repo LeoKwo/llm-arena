@@ -1,30 +1,7 @@
 from langchain.tools import tool
 
-
-# class BaseAction:
-#     """
-#     BaseAction is the base class of Action
-#     """
-#     def __init__(self, action, target=None, parameters=None, reason=None):
-#         self.action = action
-#         self.target = target
-#         self.parameters = parameters or {}
-#         self.reason = reason
-
-#     def to_dict(self):
-#         return {
-#             "action": self.action,
-#             "target": self.target,
-#             "parameters": self.parameters,
-#             "reason": self.reason
-#         }
-
-#     def __repr__(self):
-#         return str(self.to_dict())
-    
-
 @tool
-def observe(target: str, reason: str = "") -> str:
+def observe(state: dict):
     """
     Observe an agent, location, or object.
 
@@ -36,7 +13,7 @@ def observe(target: str, reason: str = "") -> str:
     return f"Observed {target}. Reason: {reason}"
 
 @tool
-def move(target: str, reason: str = "") -> str:
+def move(state: dict):
     """
     Move the agent to a location or position.
 
@@ -47,7 +24,7 @@ def move(target: str, reason: str = "") -> str:
     return f"Moved to {target}. Reason: {reason}"
 
 @tool
-def interact(target: str, method: str, reason: str = "") -> str:
+def interact(state: dict):
     """
     Interact with another agent or object.
 
@@ -59,7 +36,7 @@ def interact(target: str, method: str, reason: str = "") -> str:
     return f"Interacted with {target} via {method}. Reason: {reason}"
 
 @tool
-def attack(target: str, method: str = "direct", reason: str = "") -> str:
+def attack(state: dict):
     """
     Attack a target agent or location.
 
@@ -71,7 +48,7 @@ def attack(target: str, method: str = "direct", reason: str = "") -> str:
     return f"Attacked {target} via {method}. Reason: {reason}"
 
 @tool
-def wait(reason: str = "") -> str:
+def wait(state: dict):
     """
     Wait / skip turn.
 
