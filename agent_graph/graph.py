@@ -26,6 +26,85 @@ def _text(content):
     return str(content)
 
 
+def reflect_turn(
+    llm,
+    name,
+    persona,
+    goals,
+    memory,
+    world,
+    turn,
+    outcomes,
+    lang="en",
+    on_event=None,
+):
+    """Reflect on a *just finished* turn, with the current situation in view.
+
+    This runs post-turn (after the faction's actions have resolved) rather than
+    at the start of the next turn, so the reflection is aligned with the
+    timeline: it sees the observation for the turn that just ended, the actions
+    taken, and their results, instead of only stale memories.
+    """
+    if llm is None:
+        return ""
+
+    observation = world.get_observation(name)
+    recent = memory.recent(8)
+    max_turns = getattr(world, "max_turns", None)
+    time_note = ""
+    if max_turns:
+        remaining = max(0, max_turns - (turn + 1))
+        time_note = f" Only {remaining} turns remain after this one."
+    happened = "\n".join(
+        f"- {entry.get('action', '?')} -> {entry.get('result', '')}"
+        for entry in (outcomes or [])
+    ) or "- (no actions taken)"
+    lang_suffix = ("\n\n" + language_instruction(lang)) if language_instruction(lang) else ""
+    prompt = (
+        f"You are {name}. Persona: {persona}\n"
+        f"Goals:\n{format_goals(goals)}\n\n"
+        f"Current situation (after turn {turn + 1}):\n{observation}\n\n"
+        f"What you did this turn:\n{happened}\n\n"
+        f"Recent memories:\n" + "\n".join(recent) + "\n\n"
+        "Write a concise strategic reflection (3-4 sentences) about your "
+        "position, the outcome of this turn, any mistakes, and what you should "
+        "do next." + time_note + lang_suffix
+    )
+
+    if on_event is not None:
+        on_event(
+            {"type": "llm_start", "agent": name, "node": "reflect", "turn": turn, "text": ""}
+        )
+    parts = []
+    try:
+        for chunk in llm.stream(prompt):
+            piece = _text(chunk.content)
+            if piece:
+                parts.append(piece)
+                if on_event is not None:
+                    on_event(
+                        {
+                            "type": "llm_token",
+                            "agent": name,
+                            "node": "reflect",
+                            "turn": turn,
+                            "text": piece,
+                        }
+                    )
+    except Exception:
+        # A reflection failure must never break the game.
+        parts = []
+    finally:
+        if on_event is not None:
+            on_event(
+                {"type": "llm_end", "agent": name, "node": "reflect", "turn": turn, "text": ""}
+            )
+    text = "".join(parts).strip()
+    if text:
+        memory.add_reflection(text)
+    return text
+
+
 def build_agent_graph(
     name, persona, goals, llm, world, memory, verbose=False, on_event=None, lang="en"
 ):
@@ -70,34 +149,16 @@ def build_agent_graph(
             "llm_calls": 0,
         }
 
-    def reflect_node(state):
-        turn = state.get("turn", 0)
-        recent = memory.recent(8)
-        max_turns = getattr(world, "max_turns", None)
-        time_note = ""
-        if max_turns:
-            remaining = max(0, max_turns - (turn + 1))
-            time_note = f" Only {remaining} turns remain after this one."
-        prompt = (
-            f"You are {name}. Persona: {persona}\n"
-            f"Goals:\n{format_goals(goals)}\n\n"
-            f"Recent memories:\n" + "\n".join(recent) + "\n\n"
-            "Write a concise strategic reflection (3-4 sentences) about your "
-            "position, mistakes, and what you should do next." + time_note + lang_suffix
-        )
-        reflection = stream_text(prompt, "reflect", turn)
-        memory.add_reflection(reflection)
-        reflections = list(state.get("reflections", []))
-        reflections.append(reflection)
-        return {"reflections": reflections}
-
     def plan_node(state):
         turn = state.get("turn", 0)
+        # Only the most recent reflections matter; injecting the whole history
+        # lets stale turns dominate over the current situation.
+        recent_reflections = list(state.get("reflections", []))[-2:]
         prompt = (
             f"You are {name}. Persona: {persona}\n"
             f"Goals:\n{format_goals(goals)}\n\n"
             f"Current situation:\n{state.get('observation', '')}\n\n"
-            "Reflections:\n" + "\n".join(state.get("reflections", [])) + "\n\n"
+            "Reflections:\n" + "\n".join(recent_reflections) + "\n\n"
             "Relevant memories:\n" + "\n".join(state.get("memory_context", [])) + "\n\n"
             "State a short plan (1-2 sentences) for this turn." + lang_suffix
         )
@@ -142,16 +203,6 @@ def build_agent_graph(
             return "collect"
         return "tools"
 
-    def route_after_observe(state):
-        turn = state.get("turn", 0)
-        if (
-            turn > 0
-            and turn % REFLECT_EVERY == 0
-            and memory.count() >= REFLECT_MIN_MEMORIES
-        ):
-            return "reflect"
-        return "plan"
-
     def collect_node(state):
         messages = state.get("messages", [])
         results_by_id = {}
@@ -181,19 +232,22 @@ def build_agent_graph(
         last = actions[-1]
         return {"actions": actions, "action": last, "result": last.get("result")}
 
+    def route_entry(state):
+        # Human-controlled turns inject a commander's directive and skip
+        # observe/plan, going straight to action execution.
+        return "act" if state.get("directive") else "observe"
+
     builder = StateGraph(AgentState)
     builder.add_node("observe", observe_node)
-    builder.add_node("reflect", reflect_node)
     builder.add_node("plan", plan_node)
     builder.add_node("act", act_node)
     builder.add_node("tools", ToolNode(tools))
     builder.add_node("collect", collect_node)
 
-    builder.add_edge(START, "observe")
     builder.add_conditional_edges(
-        "observe", route_after_observe, {"reflect": "reflect", "plan": "plan"}
+        START, route_entry, {"observe": "observe", "act": "act"}
     )
-    builder.add_edge("reflect", "plan")
+    builder.add_edge("observe", "plan")
     builder.add_edge("plan", "act")
     builder.add_conditional_edges(
         "act", route_after_act, {"tools": "tools", "collect": "collect"}

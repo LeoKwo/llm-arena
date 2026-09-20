@@ -14,6 +14,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingRes
 from agent.init_agents import (
     DEFAULT_API_PROVIDERS,
     DEFAULT_LOCAL_MODELS,
+    NATIONS,
     default_model_config,
 )
 from agent.llm_factory import (
@@ -24,6 +25,7 @@ from agent.llm_factory import (
     provider_status,
     report_env_config,
 )
+from engine.human import HumanController
 from engine.savegame import (
     delete_save,
     list_saves,
@@ -44,6 +46,8 @@ _state_lock = threading.Lock()
 # The SSE queue of the active run, so out-of-band events (e.g. "saved") can be
 # injected into the live feed.
 _active_events: "queue.Queue | None" = None
+# The HumanController of the active run, if any (for /api/human/* endpoints).
+_active_human = None
 
 # API keys entered in the Web UI. Kept in memory for this local server process;
 # they take precedence over environment variables for the duration of a run.
@@ -207,9 +211,19 @@ def _autosave():
         return None
 
 
-def _start_stream(max_turns, model_config, lang, resume=None, report_llm=None, report_label=None, report_enabled=True):
+def _start_stream(
+    max_turns,
+    model_config,
+    lang,
+    resume=None,
+    report_llm=None,
+    report_label=None,
+    report_enabled=True,
+    join=None,
+    human_faction=None,
+):
     """Acquire the run lock and stream a simulation (fresh or resumed)."""
-    global _active_events, _latest_state
+    global _active_events, _latest_state, _active_human
 
     if not _run_lock.acquire(blocking=False):
         return _error_stream("A simulation is already running.")
@@ -220,8 +234,18 @@ def _start_stream(max_turns, model_config, lang, resume=None, report_llm=None, r
     events: "queue.Queue" = queue.Queue()
     _active_events = events
 
+    human = HumanController(
+        emit=lambda event: events.put(event),
+        should_stop=_stop_event.is_set,
+    )
+    if join:
+        human.join(join, set(NATIONS))
+    elif human_faction:
+        human.restore(human_faction)
+    _active_human = human
+
     def worker():
-        global _active_events
+        global _active_events, _active_human
         try:
             run(
                 max_turns=max_turns,
@@ -235,6 +259,7 @@ def _start_stream(max_turns, model_config, lang, resume=None, report_llm=None, r
                 report_llm=report_llm,
                 report_label=report_label,
                 report_enabled=report_enabled,
+                human=human,
             )
             if _stop_event.is_set():
                 _autosave()
@@ -242,6 +267,7 @@ def _start_stream(max_turns, model_config, lang, resume=None, report_llm=None, r
             events.put({"type": "error", "message": f"{type(exc).__name__}: {exc}"})
         finally:
             _active_events = None
+            _active_human = None
             events.put(None)
             _run_lock.release()
 
@@ -350,6 +376,64 @@ def stop():
     return {"stopping": False}
 
 
+@app.post("/api/human/join")
+async def human_join(request: Request):
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    faction = (body or {}).get("faction")
+    human = _active_human
+    if human is None:
+        return JSONResponse({"error": "No game is running."}, status_code=409)
+    result = human.join(faction or "", set(NATIONS))
+    if not result.get("ok"):
+        return JSONResponse({"error": result.get("error", "join failed")}, status_code=409)
+    return result
+
+
+@app.get("/api/human/status")
+def human_status():
+    human = _active_human
+    if human is None:
+        return {"joined": False, "phase": "idle", "running": False}
+    data = human.snapshot()
+    data["running"] = True
+    return data
+
+
+@app.post("/api/human/intent")
+async def human_intent(request: Request):
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    human = _active_human
+    if human is None or not human.submit_intent(body or {}):
+        return JSONResponse({"error": "Not awaiting your orders."}, status_code=409)
+    return {"ok": True}
+
+
+@app.post("/api/human/confirm")
+async def human_confirm(request: Request):
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    human = _active_human
+    if human is None or not human.submit_confirm(body or {}):
+        return JSONResponse({"error": "Not awaiting confirmation."}, status_code=409)
+    return {"ok": True}
+
+
+@app.post("/api/human/autopilot")
+def human_autopilot():
+    human = _active_human
+    if human is None or not human.autopilot():
+        return JSONResponse({"error": "Nothing to hand over."}, status_code=409)
+    return {"ok": True}
+
+
 @app.get("/api/run")
 async def run_simulation(request: Request):
     params = dict(request.query_params)
@@ -369,6 +453,14 @@ async def run_simulation(request: Request):
         lang = "en"
 
     report_llm, report_label, report_enabled = _resolve_report_llm(params)
+
+    join_slug = (params.get("join") or "").strip().lower()
+    join_nation = None
+    if join_slug and join_slug not in ("spectator", "none"):
+        join_nation = NATION_SLUGS.get(join_slug)
+        if join_nation is None:
+            return _error_stream(f"Unknown faction '{join_slug}'.")
+
     return _start_stream(
         max_turns,
         model_config,
@@ -377,6 +469,7 @@ async def run_simulation(request: Request):
         report_llm=report_llm,
         report_label=report_label,
         report_enabled=report_enabled,
+        join=join_nation,
     )
 
 
@@ -419,6 +512,7 @@ async def load_simulation(request: Request):
         report_llm=report_llm,
         report_label=report_label,
         report_enabled=report_enabled,
+        human_faction=payload.get("human_faction"),
     )
 
 

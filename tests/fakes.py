@@ -36,22 +36,64 @@ class FakeMemory:
         self.reflections.extend(data.get("reflections", []) or [])
 
 
+from types import SimpleNamespace
+
+
+class StreamingLLM:
+    """Minimal fake chat model exposing a ``stream`` interface."""
+
+    def __init__(self, chunks=None):
+        self.chunks = list(chunks) if chunks else ["A reflection."]
+        self.prompts = []
+
+    def stream(self, prompt):
+        self.prompts.append(prompt)
+        for chunk in self.chunks:
+            yield SimpleNamespace(content=chunk)
+
+
 class ScriptedGraph:
     """A fake LangGraph agent that returns actions from a callback."""
 
     def __init__(self, actions=None):
         self.actions = actions
+        self.states = []
 
     def invoke(self, state):
+        self.states.append(dict(state))
         name = state.get("agent_name", "?")
         turn = state.get("turn", 0)
         actions = self.actions(name, turn) if self.actions else []
         return {
-            "observation": f"observation for {name} at turn {turn}",
+            "observation": state.get("observation", f"observation for {name} at turn {turn}"),
             "actions": actions or [],
-            "plan": f"plan for {name}",
+            "plan": state.get("plan", f"plan for {name}"),
             "reflections": list(state.get("reflections", [])),
         }
+
+
+class FakeHuman:
+    """Non-blocking stand-in for HumanController used in loop tests."""
+
+    def __init__(self, faction, intent=None, confirm=None, suggest_count=3, timeout=1.0):
+        self.faction = faction
+        self.suggest_count = suggest_count
+        self.timeout = timeout
+        self._intent = intent if intent is not None else {"choice": 0}
+        self._confirm = confirm if confirm is not None else {"accept": True}
+        self.prompts = []
+        self.plans = []
+
+    def is_human(self, name):
+        return self.faction == name
+
+    def request_intent(self, prompt, timeout=None):
+        self.prompts.append(prompt)
+        return dict(self._intent)
+
+    def request_confirm(self, plan, timeout=None):
+        self.plans.append(plan)
+        return dict(self._confirm)
 
 
 def end_turn_action(name):

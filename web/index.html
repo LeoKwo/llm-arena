@@ -352,6 +352,38 @@
   .save-row .badge-end { color: var(--ok); font-size: 11px; font-weight: 600; }
   .save-row button { padding: 5px 12px; font-size: 12px; }
   .save-row button.danger { background: var(--danger); color: #fff; }
+  /* --- Human participation --- */
+  .join-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin-top: 10px; }
+  .join-grid button { width: 100%; }
+  .human-badge {
+    font-size: 11px; color: var(--ok); border: 1px solid var(--border);
+    border-radius: 10px; padding: 3px 8px; white-space: nowrap;
+  }
+  .suggestions { display: flex; flex-direction: column; gap: 8px; margin: 8px 0; }
+  .suggestion {
+    border: 1px solid var(--border); border-radius: 8px; padding: 10px;
+    background: var(--panel-2); cursor: pointer;
+  }
+  .suggestion.sel { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+  .suggestion .s-title { font-weight: 700; display: flex; align-items: center; gap: 8px; }
+  .suggestion .s-why { color: var(--muted); font-size: 12px; margin-top: 4px; }
+  .suggestion .s-intent { font-size: 12px; margin-top: 6px; color: #c8cede; }
+  .risk { font-size: 10px; font-weight: 700; border-radius: 8px; padding: 1px 7px; text-transform: uppercase; }
+  .risk.low { background: rgba(74, 222, 128, 0.18); color: var(--ok); }
+  .risk.medium { background: rgba(229, 192, 123, 0.18); color: #e5c07b; }
+  .risk.high { background: rgba(255, 107, 107, 0.18); color: var(--danger); }
+  #humanorders {
+    width: 100%; margin: 6px 0 10px; background: #0b0e13; color: var(--text);
+    border: 1px solid var(--border); border-radius: 6px; padding: 8px;
+    resize: vertical; font-family: inherit; font-size: 13px;
+  }
+  .plan-obj { font-weight: 700; margin: 6px 0; }
+  .plan-list { margin: 4px 0; padding-left: 18px; font-size: 13px; }
+  .plan-risks { color: #e5c07b; font-size: 12px; margin-top: 6px; }
+  .plan-warn { color: var(--danger); font-weight: 700; margin-top: 8px; }
+  .plan-actions { display: flex; gap: 8px; margin-top: 12px; }
+  .human-phase { color: var(--muted); font-size: 12px; min-height: 16px; }
+  #humanfaction { width: auto; display: inline-block; }
 </style>
 </head>
 <body>
@@ -359,9 +391,11 @@
   <h1>LLM Arena</h1>
   <div class="turn-badge"><span data-i18n="turn">Turn</span> <span id="turn">-</span><span id="turnmax"></span></div>
   <div id="status" class="status" data-i18n="status_idle">idle</div>
+  <span id="humanbadge" class="human-badge" style="display:none"></span>
   <div class="spacer"></div>
   <button id="spectate" class="btn-lang" type="button" data-i18n="spectator">Spectator</button>
   <button id="reportbtn" class="btn-lang" type="button" data-i18n="report" style="display:none">Report</button>
+  <button id="joinbtn" class="btn-lang" type="button" data-i18n="join">Join</button>
   <button id="savebtn" class="btn-lang" type="button" data-i18n="save">Save</button>
   <button id="savesbtn" class="btn-lang" type="button" data-i18n="saves">Saves</button>
   <button id="langtoggle" class="btn-lang" type="button">中文</button>
@@ -382,6 +416,19 @@
         <span class="hint" id="modeltogglehint" data-i18n="model_hint_off">Off = local Ollama models. On = cloud API providers.</span>
       </div>
       <div class="model-grid" id="modelgrid"></div>
+      <div class="toggle-row" style="margin-top:12px">
+        <label class="toggle">
+          <span data-i18n="participate">Participate as</span>
+          <select id="humanfaction">
+            <option value="">Spectator</option>
+            <option value="germany">Germany</option>
+            <option value="france">France</option>
+            <option value="uk">United Kingdom</option>
+            <option value="ussr">Soviet Union</option>
+          </select>
+        </label>
+        <span class="hint" data-i18n="participate_hint">You control that faction until the game ends; the AI advises you.</span>
+      </div>
       <details class="keys" id="keysbox" open>
         <summary data-i18n="api_keys">API Keys</summary>
         <div class="keys" id="apikeys"></div>
@@ -437,6 +484,47 @@
       <button class="modal-close" type="button" data-close="savesmodal" data-i18n="close">Close</button>
     </div>
     <div class="save-list" id="savelist"></div>
+  </div>
+</div>
+
+<div class="modal" id="joinmodal">
+  <div class="modal-card" style="max-width:440px">
+    <div class="modal-head">
+      <h2 data-i18n="join_title">Join a faction</h2>
+      <div class="spacer"></div>
+      <button class="modal-close" type="button" data-close="joinmodal" data-i18n="close">Close</button>
+    </div>
+    <p class="hint" data-i18n="join_hint">You will command this faction until the game ends. The AI becomes your chief of staff.</p>
+    <div class="join-grid" id="joingrid"></div>
+  </div>
+</div>
+
+<div class="modal" id="humanmodal">
+  <div class="modal-card" style="max-width:660px">
+    <div class="modal-head">
+      <h2 id="humantitle" data-i18n="your_turn">Your turn</h2>
+      <div class="spacer"></div>
+      <button id="humanautopilot" class="modal-close" type="button" data-i18n="let_ai">Let AI play</button>
+    </div>
+    <div id="humanphase" class="human-phase"></div>
+    <div id="humanintent">
+      <h4 data-i18n="suggestions">Chief of staff suggests</h4>
+      <div id="humansuggestions" class="suggestions"></div>
+      <textarea id="humanorders" rows="2"></textarea>
+      <button id="humanexecute" data-i18n="execute">Execute</button>
+    </div>
+    <div id="humanconfirm" style="display:none">
+      <h4 data-i18n="confirm_plan">Confirm the plan</h4>
+      <div class="plan-obj" id="humanplanobj"></div>
+      <ul class="plan-list" id="humanplansteps"></ul>
+      <div class="plan-risks" id="humanplanrisks"></div>
+      <div class="plan-warn" id="humanplanwarn"></div>
+      <div class="plan-actions">
+        <button id="humanconfirmbtn" data-i18n="confirm">Confirm</button>
+        <button id="humanmodify" class="btn-ghost" type="button" data-i18n="modify">Modify</button>
+        <button id="humancancel" class="btn-ghost" type="button" data-i18n="cancel">Cancel</button>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -565,6 +653,31 @@ const I18N = {
     save_turn: (t) => `turn ${t + 1}`,
     save_ended_badge: "finished",
     close: "Close",
+    join: "Join",
+    join_title: "Join a faction",
+    join_hint: "You will command this faction until the game ends. The AI becomes your chief of staff.",
+    participate: "Participate as",
+    participate_hint: "You control that faction until the game ends; the AI advises you.",
+    your_turn: "Your turn",
+    suggestions: "Chief of staff suggests",
+    confirm_plan: "Confirm the plan",
+    own_orders_placeholder: "Or write your own order, e.g. \"all units attack Paris\"...",
+    execute: "Execute",
+    let_ai: "Let AI play",
+    confirm: "Confirm",
+    modify: "Modify",
+    cancel: "Cancel",
+    advising: "The chief of staff is analysing the situation...",
+    planning: "Drafting the operational plan...",
+    human_joined_msg: (f) => `You now command ${f}. The AI advises you and follows your orders.`,
+    human_action_label: (f) => `Commander's order (${f})`,
+    human_autopilot_msg: (f) => `Autopilot: the AI played ${f}'s turn.`,
+    human_timeout_msg: "No response in time - the AI played this turn.",
+    plan_objective: "Objective",
+    plan_steps: "Steps",
+    plan_risks: "Risks",
+    warning: "Warning",
+    risk: "risk",
   },
   zh: {
     turn: "回合",
@@ -672,6 +785,31 @@ const I18N = {
     save_turn: (t) => `第 ${t + 1} 回合`,
     save_ended_badge: "已结束",
     close: "关闭",
+    join: "参战",
+    join_title: "选择参战势力",
+    join_hint: "你将指挥该势力直到对局结束，AI 会作为你的参谋。",
+    participate: "参战身份",
+    participate_hint: "你将指挥该势力直到对局结束；AI 作为参谋提供建议。",
+    your_turn: "你的回合",
+    suggestions: "参谋建议",
+    confirm_plan: "确认作战计划",
+    own_orders_placeholder: "或写下你自己的指令，例如“所有单位进攻 Paris”……",
+    execute: "执行",
+    let_ai: "交给 AI 代打",
+    confirm: "确认",
+    modify: "修改",
+    cancel: "取消",
+    advising: "参谋正在分析局势……",
+    planning: "正在整理作战计划……",
+    human_joined_msg: (f) => `你现在指挥 ${f}。AI 将提供建议并执行你的命令。`,
+    human_action_label: (f) => `指挥官命令（${f}）`,
+    human_autopilot_msg: (f) => `已托管：AI 代为指挥 ${f} 的回合。`,
+    human_timeout_msg: "超时未响应——本回合已由 AI 代打。",
+    plan_objective: "目标",
+    plan_steps: "步骤",
+    plan_risks: "风险",
+    warning: "警告",
+    risk: "风险",
   },
 };
 
@@ -752,6 +890,7 @@ function refreshDynamicI18n() {
   }
   if (lastNations) renderNations(lastNations, lastWorld);
   applyStatus();
+  updateHumanBadge();
 }
 
 function setRunning(running) {
@@ -1422,6 +1561,40 @@ function handle(event) {
     case "saved":
       log(event.auto ? t("save_autosaved", event.save.id) : t("save_saved", event.save.id), "system");
       break;
+    case "human_joined":
+      humanJoined = event.agent;
+      updateHumanBadge();
+      log(t("human_joined_msg", event.agent), "system");
+      break;
+    case "human_phase":
+      humanPhase = event.phase;
+      if (el("humanmodal").classList.contains("open")) {
+        el("humanphase").textContent =
+          event.phase === "planning" ? t("planning") : t("advising");
+      }
+      break;
+    case "human_prompt":
+      openHumanIntent(event);
+      break;
+    case "human_plan":
+      openHumanConfirm(event);
+      break;
+    case "human_timeout":
+      log(t("human_timeout_msg"), "system");
+      hideModal("humanmodal");
+      break;
+    case "human_autopilot":
+      log(t("human_autopilot_msg", event.agent), "system");
+      hideModal("humanmodal");
+      break;
+    case "human_action":
+      log(
+        `<div class="head"><span class="who">${ArenaReport.escapeHtml(
+          t("human_action_label", event.agent)
+        )}</span></div><div class="res">${ArenaReport.escapeHtml(event.intent || "")}</div>`,
+        "broadcast"
+      );
+      break;
     case "interrupted": {
       setStatus("status_interrupted", "done");
       clearThinking();
@@ -1517,6 +1690,7 @@ function wireSource() {
   source.onerror = () => {
     if (source && source.readyState === EventSource.CLOSED) return;
   };
+  refreshHumanStatus();
 }
 
 async function saveGame() {
@@ -1614,6 +1788,169 @@ async function loadSave(save) {
   wireSource();
 }
 
+let humanJoined = null;
+let humanPhase = null;
+let humanPending = null;
+let humanSelected = 0;
+
+function updateHumanBadge() {
+  const badge = el("humanbadge");
+  if (!badge) return;
+  if (humanJoined) {
+    badge.textContent = `${t("participate")}: ${humanJoined}`;
+    badge.style.display = "";
+  } else {
+    badge.style.display = "none";
+  }
+}
+
+function renderSuggestions() {
+  const box = el("humansuggestions");
+  const esc = ArenaReport.escapeHtml;
+  box.innerHTML = "";
+  const suggestions = (humanPending && humanPending.suggestions) || [];
+  suggestions.forEach((s, i) => {
+    const card = document.createElement("div");
+    card.className = "suggestion" + (i === humanSelected ? " sel" : "");
+    const risk = (s.risk || "medium").toLowerCase();
+    card.innerHTML =
+      `<div class="s-title">${esc(s.title || "")} ` +
+      `<span class="risk ${esc(risk)}">${esc(t("risk"))} ${esc(risk)}</span></div>` +
+      (s.rationale ? `<div class="s-why">${esc(s.rationale)}</div>` : "") +
+      (s.intent ? `<div class="s-intent">${esc(s.intent)}</div>` : "");
+    card.addEventListener("click", () => {
+      humanSelected = i;
+      renderSuggestions();
+    });
+    box.appendChild(card);
+  });
+}
+
+function openHumanIntent(event) {
+  humanPending = { suggestions: (event && event.suggestions) || [], intent: "" };
+  humanSelected = 0;
+  el("humanphase").textContent = t("advising");
+  el("humanconfirm").style.display = "none";
+  el("humanintent").style.display = "";
+  el("humanorders").value = "";
+  el("humanorders").placeholder = t("own_orders_placeholder");
+  renderSuggestions();
+  showModal("humanmodal");
+}
+
+function openHumanConfirm(event) {
+  humanPending = humanPending || { suggestions: [], intent: "" };
+  const resolvedIntent =
+    (event && event.intent) ||
+    (event && event.plan && event.plan.intent) ||
+    humanPending.intent;
+  humanPending.intent = resolvedIntent;
+  const plan = (event && event.plan) || {};
+  const esc = ArenaReport.escapeHtml;
+  el("humanphase").textContent = t("planning");
+  el("humanintent").style.display = "none";
+  el("humanconfirm").style.display = "";
+  el("humanplanobj").innerHTML =
+    `<span class="hint">${esc(t("plan_objective"))}</span> ${esc(plan.objective || "")}`;
+  el("humanplansteps").innerHTML = (plan.steps || [])
+    .map((s) => `<li>${esc(s)}</li>`)
+    .join("");
+  el("humanplanrisks").innerHTML = (plan.risks || [])
+    .map((s) => `<div>⚠ ${esc(s)}</div>`)
+    .join("");
+  el("humanplanwarn").textContent = plan.warning
+    ? `${t("warning")}: ${plan.warning}`
+    : "";
+  showModal("humanmodal");
+}
+
+async function submitHumanIntent(payload) {
+  try {
+    const res = await fetch("/api/human/intent", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `HTTP ${res.status}`);
+    hideModal("humanmodal");
+  } catch (err) {
+    log(String(err.message || err), "error");
+  }
+}
+
+async function submitHumanConfirm(payload) {
+  try {
+    const res = await fetch("/api/human/confirm", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `HTTP ${res.status}`);
+    if (payload.accept) hideModal("humanmodal");
+  } catch (err) {
+    log(String(err.message || err), "error");
+  }
+}
+
+async function humanAutopilot() {
+  try {
+    await fetch("/api/human/autopilot", { method: "POST" });
+  } catch (err) {
+    console.error(err);
+  }
+  hideModal("humanmodal");
+}
+
+async function joinAs(slug) {
+  const match = SLUGS.find(([s]) => s === slug);
+  const nation = match ? match[1] : null;
+  if (!nation) return;
+  try {
+    const res = await fetch("/api/human/join", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ faction: nation }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    humanJoined = data.faction || nation;
+    updateHumanBadge();
+    hideModal("joinmodal");
+  } catch (err) {
+    log(String(err.message || err), "error");
+  }
+}
+
+function buildJoinGrid() {
+  const grid = el("joingrid");
+  if (!grid) return;
+  grid.innerHTML = "";
+  SLUGS.forEach(([slug, nation]) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = nation;
+    button.addEventListener("click", () => joinAs(slug));
+    grid.appendChild(button);
+  });
+}
+
+async function refreshHumanStatus() {
+  try {
+    const data = await (await fetch("/api/human/status")).json();
+    if (data.joined) {
+      humanJoined = data.faction;
+      updateHumanBadge();
+    }
+    if (data.phase === "awaiting_intent" && data.prompt) {
+      openHumanIntent(data.prompt);
+    } else if (data.phase === "awaiting_confirm" && data.plan) {
+      openHumanConfirm(data);
+    }
+  } catch (err) {
+    /* ignore */
+  }
+}
+
 async function start() {
   if (source) return;
   const maxTurns = parseInt(el("maxturns").value || "10", 10);
@@ -1624,9 +1961,13 @@ async function start() {
   });
   const reportSelect = el("sel-report");
   if (reportSelect) params.set("report_provider", reportSelect.value);
+  const joinSelect = el("humanfaction");
+  if (joinSelect && joinSelect.value) params.set("join", joinSelect.value);
   clearLog();
   lastReport = null;
   lastTimeline = null;
+  humanJoined = null;
+  updateHumanBadge();
   el("reportbtn").style.display = "none";
   setStatus("status_connecting", "running");
   setRunning(true);
@@ -1641,6 +1982,21 @@ el("start").addEventListener("click", start);
 el("savebtn").addEventListener("click", saveGame);
 el("savesbtn").addEventListener("click", openSaves);
 el("reportbtn").addEventListener("click", showReport);
+el("joinbtn").addEventListener("click", () => showModal("joinmodal"));
+el("humanexecute").addEventListener("click", () => {
+  const orders = (el("humanorders").value || "").trim();
+  if (orders) submitHumanIntent({ text: orders });
+  else submitHumanIntent({ choice: humanSelected });
+});
+el("humanconfirmbtn").addEventListener("click", () => submitHumanConfirm({ accept: true }));
+el("humanmodify").addEventListener("click", () => {
+  const current = (humanPending && humanPending.intent) || "";
+  const text = window.prompt(t("modify"), current);
+  if (text === null) return;
+  submitHumanConfirm({ accept: false, text: text.trim() });
+});
+el("humancancel").addEventListener("click", humanAutopilot);
+el("humanautopilot").addEventListener("click", humanAutopilot);
 document.querySelectorAll("[data-close]").forEach((btn) => {
   btn.addEventListener("click", () => hideModal(btn.getAttribute("data-close")));
 });
@@ -1717,8 +2073,10 @@ hexmap.addEventListener("click", (e) => {
   if (tile) showHexInfo(tile.q, tile.r);
 });
 
+buildJoinGrid();
 applyI18n();
 loadProviders();
+refreshHumanStatus();
 </script>
 </body>
 </html>

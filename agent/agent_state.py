@@ -16,3 +16,4 @@ class AgentState(TypedDict, total=False):
     result: Optional[str]
     messages: Annotated[list[AnyMessage], add_messages]
     llm_calls: int
+    directive: bool

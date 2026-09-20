@@ -146,3 +146,65 @@ def test_load_unknown_save_errors(client):
     resp = c.get("/api/load?id=missing-save")
     assert resp.status_code == 200  # SSE stream carries the error event
     assert "not found" in resp.text.lower()
+
+
+def test_human_endpoints_without_a_game(client):
+    c, _ = client
+    server._active_human = None
+    assert c.get("/api/human/status").json()["running"] is False
+    assert c.post("/api/human/join", json={"faction": "Germany"}).status_code == 409
+    assert c.post("/api/human/intent", json={"choice": 0}).status_code == 409
+    assert c.post("/api/human/confirm", json={"accept": True}).status_code == 409
+    assert c.post("/api/human/autopilot").status_code == 409
+
+
+def test_human_join_endpoint_and_status(client):
+    from engine.human import HumanController
+
+    c, _ = client
+    server._active_human = HumanController()
+    try:
+        joined = c.post("/api/human/join", json={"faction": "Germany"})
+        assert joined.status_code == 200
+        assert joined.json()["faction"] == "Germany"
+        # Committed: a second join is rejected.
+        assert c.post("/api/human/join", json={"faction": "France"}).status_code == 409
+        status = c.get("/api/human/status").json()
+        assert status["joined"] is True and status["faction"] == "Germany"
+        # Wrong phase: nothing is pending.
+        assert c.post("/api/human/intent", json={"choice": 0}).status_code == 409
+    finally:
+        server._active_human = None
+
+
+def test_run_join_wires_the_human_controller(client):
+    c, captured = client
+    resp = c.get(f"/api/run?max_turns=1&{OLLAMA_PARAMS}&join=germany")
+    assert resp.status_code == 200
+    human = captured[-1]["human"]
+    assert human is not None and human.faction == "Germany"
+
+
+def test_run_rejects_unknown_join_faction(client):
+    c, _ = client
+    resp = c.get(f"/api/run?max_turns=1&{OLLAMA_PARAMS}&join=atlantis")
+    assert "Unknown faction" in resp.text
+
+
+def test_load_restores_saved_human_faction(client):
+    c, captured = client
+    world = build_default_world(seed="human-save")
+    world.max_turns = 5
+    payload = savegame.build_save_payload(
+        world,
+        {"Germany": {"provider": "ollama", "model": "m", "memory": FakeMemory()}},
+        {"lang": "en", "human_faction": "France"},
+    )
+    savegame.write_save_payload(payload, save_id="hm", save_dir=server.SAVE_DIR)
+
+    resp = c.get("/api/load?id=hm&max_turns=5")
+    assert resp.status_code == 200
+    human = captured[-1]["human"]
+    assert human is not None and human.faction == "France"
+    listed = c.get("/api/saves").json()["saves"]
+    assert listed and listed[0]["human_faction"] == "France"

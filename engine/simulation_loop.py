@@ -4,6 +4,8 @@ from agent.init_agents import (
     build_all_agents,
 )
 from agent.llm_factory import build_embeddings
+from agent_graph.graph import REFLECT_EVERY, REFLECT_MIN_MEMORIES, reflect_turn
+from engine.advisor import build_suggestions, summarize_plan
 from engine.report import generate_report
 from engine.savegame import (
     build_save_payload,
@@ -128,6 +130,159 @@ def _report_llm(agents, winner):
     return None, None
 
 
+def _resolve_intent_text(intent, suggestions):
+    if not intent:
+        return ""
+    choice = intent.get("choice")
+    if isinstance(choice, int):
+        if 0 <= choice < len(suggestions):
+            return suggestions[choice].get("intent", "")
+        return ""
+    return (intent.get("text") or "").strip()
+
+
+def _finish_faction_turn(world, bundle, name, turn, result, carry, emit, on_event, lang):
+    """Apply an agent's (or the human's) actions: memory, events, reflection."""
+    previous_reflections = len(carry[name])
+    result = result or {}
+    observation = result.get("observation", "") or world.get_observation(name)
+    actions = result.get("actions") or [result.get("action")]
+    turn_outcomes = []
+    for entry in actions:
+        if not entry:
+            continue
+        outcome = entry.get("result", "") if isinstance(entry, dict) else ""
+        bundle["memory"].add(observation, entry, outcome or "")
+        turn_outcomes.append(
+            {
+                "action": entry.get("action", "?") if isinstance(entry, dict) else "?",
+                "result": outcome,
+            }
+        )
+        emit(
+            {
+                "type": "agent_action",
+                "turn": turn,
+                "agent": name,
+                "action": entry,
+                "result": outcome,
+                "plan": result.get("plan", ""),
+                "reflections": carry[name][previous_reflections:],
+            }
+        )
+    world.end_faction_turn(name)
+    for note in world.take_broadcasts():
+        emit({"type": "broadcast", "event": note})
+    emit({"type": "world_state", "world": world.snapshot()})
+
+    # Post-turn reflection: aligned with the timeline (it sees this turn's
+    # outcome and the current situation) and used by the next turn's plan.
+    memory = bundle["memory"]
+    if (
+        bundle.get("llm") is not None
+        and turn > 0
+        and (turn + 1) % REFLECT_EVERY == 0
+        and memory.count() >= REFLECT_MIN_MEMORIES
+    ):
+        spec = NATIONS.get(name, {})
+        reflect_turn(
+            llm=bundle["llm"],
+            name=name,
+            persona=spec.get("persona", ""),
+            goals=spec.get("goals", {}),
+            memory=memory,
+            world=world,
+            turn=turn,
+            outcomes=turn_outcomes,
+            lang=lang,
+            on_event=on_event,
+        )
+    carry[name] = list(memory.reflections)
+
+
+def _run_human_turn(world, bundle, name, turn, carry, emit, on_event, lang, human):
+    """Pause for the human player and execute their confirmed intent.
+
+    Returns ``("acted", result)`` when the human acted, ``("autopilot", None)``
+    when the turn should fall back to the LLM, or ``("stop", None)`` when the
+    run was interrupted while waiting.
+    """
+    observation = world.get_observation(name)
+    llm = bundle.get("llm")
+
+    emit({"type": "human_phase", "phase": "advising", "agent": name, "turn": turn})
+    suggestions = build_suggestions(
+        world, name, observation, llm, lang, human.suggest_count
+    )
+    intent = human.request_intent(
+        {
+            "agent": name,
+            "turn": turn,
+            "suggestions": suggestions,
+            "timeout": human.timeout,
+        }
+    )
+    kind = intent.get("kind")
+    if kind == "stop":
+        return "stop", None
+    if kind in ("timeout", "autopilot"):
+        emit({"type": "human_autopilot", "agent": name, "turn": turn, "reason": kind})
+        return "autopilot", None
+
+    text = _resolve_intent_text(intent, suggestions)
+    if not text:
+        return "autopilot", None
+
+    plan = None
+    for _ in range(5):
+        emit({"type": "human_phase", "phase": "planning", "agent": name, "turn": turn})
+        plan = summarize_plan(world, name, text, observation, llm, lang)
+        confirm = human.request_confirm(
+            {
+                "agent": name,
+                "turn": turn,
+                "intent": text,
+                "plan": plan,
+                "timeout": human.timeout,
+            }
+        )
+        ckind = confirm.get("kind")
+        if ckind == "stop":
+            return "stop", None
+        if ckind in ("timeout", "autopilot"):
+            emit(
+                {"type": "human_autopilot", "agent": name, "turn": turn, "reason": ckind}
+            )
+            return "autopilot", None
+        if confirm.get("accept"):
+            break
+        text = (confirm.get("text") or "").strip() or text
+    else:
+        return "autopilot", None
+
+    directive = (
+        "COMMANDER'S ORDER (the commander's decision is final - you are the chief "
+        "of staff: carry it out even if you disagree, warning only in words):\n"
+        f"{text}\n\nConfirmed objective: {plan.get('objective', '')}"
+    )
+    primary_goal = NATIONS.get(name, {}).get("goals", {}).get("primary", "")
+    query = f"{observation}\nPrimary goal: {primary_goal}"
+    state = {
+        "agent_name": name,
+        "turn": turn,
+        "reflections": carry[name],
+        "messages": [],
+        "llm_calls": 0,
+        "observation": observation,
+        "memory_context": bundle["memory"].retrieve(query),
+        "plan": directive,
+        "directive": True,
+    }
+    result = bundle["graph"].invoke(state)
+    emit({"type": "human_action", "agent": name, "turn": turn, "intent": text})
+    return "acted", result
+
+
 def run(
     max_turns=MAX_TURNS,
     verbose=True,
@@ -143,6 +298,7 @@ def run(
     report_llm=None,
     report_label=None,
     report_enabled=True,
+    human=None,
 ):
     def emit(event):
         if on_event is not None:
@@ -249,39 +405,29 @@ def run(
                     return None
                 emit({"type": "agent_thinking", "agent": name, "turn": turn})
                 world.begin_turn(name)
-                previous_reflections = len(carry[name])
-                state = {
-                    "agent_name": name,
-                    "turn": turn,
-                    "reflections": carry[name],
-                    "messages": [],
-                    "llm_calls": 0,
-                }
-                result = bundle["graph"].invoke(state)
-                reflections = result.get("reflections", carry[name])
-                carry[name] = reflections
-                observation = result.get("observation", "")
-                actions = result.get("actions") or [result.get("action")]
-                for entry in actions:
-                    if not entry:
-                        continue
-                    outcome = entry.get("result", "") if isinstance(entry, dict) else ""
-                    bundle["memory"].add(observation, entry, outcome or "")
-                    emit(
-                        {
-                            "type": "agent_action",
-                            "turn": turn,
-                            "agent": name,
-                            "action": entry,
-                            "result": outcome,
-                            "plan": result.get("plan", ""),
-                            "reflections": reflections[previous_reflections:],
-                        }
+
+                result = None
+                if human is not None and human.is_human(name):
+                    status, result = _run_human_turn(
+                        world, bundle, name, turn, carry, emit, on_event, lang, human
                     )
-                world.end_faction_turn(name)
-                for note in world.take_broadcasts():
-                    emit({"type": "broadcast", "event": note})
-                emit({"type": "world_state", "world": world.snapshot()})
+                    if status == "stop":
+                        emit(end_event("interrupted", None))
+                        return None
+
+                if result is None:
+                    state = {
+                        "agent_name": name,
+                        "turn": turn,
+                        "reflections": carry[name],
+                        "messages": [],
+                        "llm_calls": 0,
+                    }
+                    result = bundle["graph"].invoke(state)
+
+                _finish_faction_turn(
+                    world, bundle, name, turn, result, carry, emit, on_event, lang
+                )
 
             world.advance()
             emit({"type": "world_state", "world": world.snapshot()})
@@ -293,7 +439,12 @@ def run(
                     build_save_payload(
                         world,
                         agents,
-                        {"lang": lang, "ended": ended, "winner": winner},
+                        {
+                            "lang": lang,
+                            "ended": ended,
+                            "winner": winner,
+                            "human_faction": human.faction if human else None,
+                        },
                     )
                 )
             if ended:

@@ -19,15 +19,16 @@
 - 解散：单位站在己方城市上可原地解散，资源归还该城市
 - **首都吞并**：攻占敌国首都并**保持一整回合**（前两回合为保护期，不可吞并）→ 吞并该国**全部城市**（每座保留 75%、下限 5）；该国**军队不转移、留在原地**成为游击势力，只有在**城市与军队都被消灭**时才判负
 - 每个行动的结果都会回显**分数变化**（如 `[score 160 -> 165, +5]`）
-- LangGraph `StateGraph` 回合流程：`observe → (reflect) → plan → act → tools → collect`，一回合内可生成并指挥多个单位，最后 `end_turn`
+- LangGraph `StateGraph` 回合流程：`observe → plan → act → tools → collect`，一回合内可生成并指挥多个单位，最后 `end_turn`
 - FAISS + embedding 的语义记忆检索
-- 每 3 回合触发一次反思（reflection），每回合生成计划（plan）
+- **回合结束后反思**：每个势力每 3 回合在**该回合结束后**做一次反思（基于刚结束回合的局势、动作与结果，以及当前排名与最近事件），并供下回合计划参考
 - 胜负规则：既无城市也无单位则淘汰；达到最大回合后按上面的公式评分，最高者胜
 - 回合顺序每轮轮换；对局有固定回合上限，模型在每回合都能看到当前回合、剩余回合数、计分公式与实时排名
 - 本地模型 / 云端 API 模型可切换，每个国家可独立选择不同或相同的提供商
 - Web UI 实时 SSE 推送：回合、行动、结果、计划、反思、六边形地图、关系、得分
 - **赛后报告**：对局结束后弹出全屏报告，包含**分数增长曲线**（按回合显示四国得分，并在城市易主、首都失守/夺回/吞并、势力淘汰等重大事件处标记）与**新闻报道式战报**（由模型以战地记者口吻撰写，失败时自动回退到模板生成的战报）
 - **存档 / 读档**：随时手动保存当前对局，中断时自动存档；可从任意存档（包括已结束的对局，调大回合数即可续打）继续对局，Web UI 与命令行都支持
+- **人类参与**：可全程观战，也可选择接管任意一方（开局或中途加入，一旦加入直到本局结束）。轮到你时，AI 参谋给出 **≥3 个带理由与风险的建议**，你可选择建议或自己下达战略指令；AI 会总结并确认最终目标与计划、明确警告自杀式选择的后果，然后**照你的命令执行**。超时未响应则本回合自动交给 AI
 - 中 / 英界面切换，模型输出语言随界面切换
 - 支持中断正在进行的模拟
 - 离线测试套件（pytest + `node --test`）与 GitHub Actions CI
@@ -164,6 +165,10 @@ EMBEDDING_API_KEY=
 REPORT_PROVIDER=
 REPORT_MODEL=
 REPORT_API_KEY=
+
+# ---- 人类参与（可选）----
+HUMAN_TIMEOUT=90
+SUGGESTION_COUNT=3
 ```
 
 > DeepSeek 目前**没有 embedding 接口**，所以 embedding 默认用智谱 GLM 的 `embedding-3`（需要 `ZHIPUAI_API_KEY`）。想免费本地运行可设 `EMBEDDING_PROVIDER=ollama`（默认模型 `qwen3-embedding:0.6b`）。
@@ -254,6 +259,7 @@ curl http://127.0.0.1:8000/api/stop
 8. **可交互地图**：拖拽平移、滚轮缩放、**重置视图**按钮复位；点击任意六边形在下方信息框查看城市/地形、归属、资源与驻扎单位。
 9. **存档 / 读档**：顶部 **Save** 立即保存当前对局；**Saves** 打开存档列表，可 **Continue** 继续或 **Delete** 删除。中断对局会自动写入 `saves/autosave.json`。继续已结束的存档时，把 `Max turns` 调到大于存档回合数即可续打。
 10. **赛后报告**：对局结束（或中断）后自动弹出报告弹窗，含分数增长曲线与战报；关闭后可用顶部 **Report** 按钮重新打开。
+11. **人类参与**：设置面板的「参战身份」可选择接管一方（或对局中点顶部 **Join** 中途加入）。轮到你时弹出参谋建议与指令框，选择或输入指令后确认计划即可执行；点「交给 AI 代打」或超时则本回合由 AI 决策。顶部会显示你当前所控势力。
 
 > 注意：SSE 客户端断开不会自动取消后台模拟；请使用 Interrupt 按钮或 `/api/stop`。
 
@@ -272,6 +278,15 @@ curl http://127.0.0.1:8000/api/stop
 - Web UI：`POST /api/save` 保存、`GET /api/saves` 列表、`GET /api/load?id=...` 续档（复用同一 SSE 事件流）、`DELETE /api/saves?id=...` 删除；中断时自动写 `saves/autosave.json`。
 - 命令行：`main.py --load <id|path>` 续档，`--autosave` 每回合写 `saves/autosave.json`，`--save-dir` 指定目录，`--max-turns` 覆盖回合上限（可用于继续已结束的对局）。
 
+## 人类参与
+
+- **观战或参战**：默认观战；可在设置面板选择「参战身份」，或对局中点击顶部 **Join** 选择接管任意一方。**一旦加入直到本局结束，不能更换或退出**（可随时 Interrupt 结束整局）。
+- **参谋建议**：轮到你时，你的势力 LLM 作为参谋给出 **≥3 个方向**，每个都含理由与风险等级（低/中/高）；你也可以直接输入自己的战略指令（如「所有单位进攻 Paris」）。
+- **确认计划**：AI 会把你的意图整理成「目标 / 步骤 / 风险」，并对高危或自杀式选择**明确警告后果**，你确认、修改或取消后才执行。
+- **执行**：确认后由 AI 把命令翻译成具体动作执行；执行中提示词定位为「参谋长」，命令为最终决定——**先警告、后执行**，即便看起来是自杀选项。
+- **超时托管**：`HUMAN_TIMEOUT` 秒内未响应（默认 90，0=无限等待），本回合自动交给 AI；也可手动点「交给 AI 代打」。
+- **读档**：存档会记录人类所控势力，续档后继续由你指挥。接口：`POST /api/human/join`、`GET /api/human/status`、`POST /api/human/intent`、`POST /api/human/confirm`、`POST /api/human/autopilot`。
+
 ## 项目结构
 
 ```
@@ -279,6 +294,8 @@ main.py                      # 命令行入口（支持 --load / --autosave / --
 engine/simulation_loop.py    # 回合引擎 + 事件发射（CLI / Web 共用）
 engine/report.py             # 赛后战报：模板生成 + LLM 撰写与回退
 engine/savegame.py           # 存档序列化 / 反序列化 / 原子写盘
+engine/human.py              # 人类参与：等待/唤醒的决策闸门
+engine/advisor.py            # 参谋建议、风险评估、计划总结（含模板兜底）
 world/hexmap.py              # 六边形坐标/邻接/方向 + 欧洲城市布局 + 地图生成
 world/environment.py         # World：城市/地块/单位、行动结算、评分、快照
 agent/
@@ -288,7 +305,7 @@ agent/
   agent_state.py             # AgentState (LangGraph TypedDict)
   tools.py                   # 动作工具工厂 make_tools(world, agent)
   persona.py / goals.py / prompt.py
-agent_graph/graph.py         # StateGraph: observe/reflect/plan/act/tools/collect
+agent_graph/graph.py         # StateGraph: observe/plan/act/tools/collect + reflect_turn（回合后反思）
 agent_memory/memory_store.py # FAISS 记忆存储（支持导出/导入）
 web/
   server.py                  # FastAPI + SSE 服务 + 存档接口
@@ -309,6 +326,8 @@ requirements.txt
 - `EMBEDDING_PROVIDER` / `EMBEDDING_MODEL`：智能体记忆用的 embedding，默认 `zhipu` / `embedding-3`。
 - `REPORT_PROVIDER` / `REPORT_MODEL`：赛后战报的专用模型（provider 可填 `ollama|zhipu|deepseek|qwen|kimi`）。留空则使用胜者国家的模型；`REPORT_PROVIDER=none` 可禁用 AI 战报（仍会生成模板战报）。
 - `REPORT_API_KEY`：可选，仅为战报模型使用的 API Key；不填则沿用该 provider 的正常密钥（Web UI / 环境变量 / `.env`）。
+- `HUMAN_TIMEOUT`（90）：人类玩家响应超时的秒数，超时后该回合由 AI 代打；设为 0 表示无限等待。
+- `SUGGESTION_COUNT`（3）：人类回合中参谋给出的建议数量上限（不足时用模板补齐）。
 - `MAP_SEED`：可选，固定地图随机种子（地块资源值），便于复现同一张地图；不设置则每次随机。
 - `ATTACK_ATTRITION`（0.3）：获胜方损失败方强度的比例。
 - `CITY_LOOT_RATE`（0.3）：夺城时掠夺城市资源的比例。
@@ -325,7 +344,7 @@ requirements.txt
 - `MAX_FORCED_MARCH`（5）：每回合强行军上限格数。
 - `MIN_FORCED_MARCH_RESERVE`（1）：强行军后单位必须保留的资源。
 - `MAX_TURNS`：CLI 默认 20，Web UI 默认 10，均可在 UI 或 `run(max_turns=...)` 覆盖。
-- `REFLECT_EVERY`：默认每 3 回合反思一次（`agent_graph/graph.py`）。
+- `REFLECT_EVERY`：默认每 3 回合，在该势力回合**结束后**反思一次（`engine/simulation_loop.py` 调用 `agent_graph/graph.py` 的 `reflect_turn`）。
 - 目标权重：`primary 0.5 / secondary 0.3 / tertiary 0.2`（`world/environment.py`）。
 - 本地代理：若系统开启了全局代理，Python httpx 可能把 `127.0.0.1` 也走代理导致 Ollama 502。`agent/llm_factory.py` 已自动为 `127.0.0.1` / `localhost` / `::1` 设置 `NO_PROXY`。
 
@@ -346,7 +365,7 @@ requirements.txt
 node --test web/tests               # 前端：分数曲线、战报渲染、事件文案（node 内置 runner）
 ```
 
-- `tests/`：`test_world_rules.py`（战斗/占领/吞并/淘汰/计分）、`test_timeline.py`（事件日志与分数历史）、`test_savegame.py`（序列化往返、原子写、损坏文件）、`test_simulation_loop.py`（完整生命周期与检查点）、`test_resume.py`（续档连贯性）、`test_report.py`（模板/LLM 回退）、`test_server.py`（存档 API）。
+- `tests/`：`test_world_rules.py`（战斗/占领/吞并/淘汰/计分）、`test_timeline.py`（事件日志与分数历史）、`test_savegame.py`（序列化往返、原子写、损坏文件）、`test_simulation_loop.py`（完整生命周期与检查点）、`test_resume.py`（续档连贯性）、`test_report.py`（模板/LLM 回退）、`test_human.py`（人类决策闸门）、`test_advisor.py`（参谋建议/风险/计划兜底）、`test_server.py`（存档与人类参与 API）。
 - `web/tests/report.test.js`：前端纯函数测试。
 - CI：`.github/workflows/tests.yml` 在 push / PR 时分别运行 Python 与 Node 测试。
 
