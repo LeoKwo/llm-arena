@@ -26,8 +26,11 @@
 - 回合顺序每轮轮换；对局有固定回合上限，模型在每回合都能看到当前回合、剩余回合数、计分公式与实时排名
 - 本地模型 / 云端 API 模型可切换，每个国家可独立选择不同或相同的提供商
 - Web UI 实时 SSE 推送：回合、行动、结果、计划、反思、六边形地图、关系、得分
+- **赛后报告**：对局结束后弹出全屏报告，包含**分数增长曲线**（按回合显示四国得分，并在城市易主、首都失守/夺回/吞并、势力淘汰等重大事件处标记）与**新闻报道式战报**（由模型以战地记者口吻撰写，失败时自动回退到模板生成的战报）
+- **存档 / 读档**：随时手动保存当前对局，中断时自动存档；可从任意存档（包括已结束的对局，调大回合数即可续打）继续对局，Web UI 与命令行都支持
 - 中 / 英界面切换，模型输出语言随界面切换
 - 支持中断正在进行的模拟
+- 离线测试套件（pytest + `node --test`）与 GitHub Actions CI
 
 ## 游戏规则
 
@@ -155,6 +158,12 @@ EMBEDDING_MODEL=embedding-3
 # 注意：填 base URL（例如 https://open.bigmodel.cn/api/paas/v4），不要带结尾的 /embeddings
 EMBEDDING_BASE_URL=
 EMBEDDING_API_KEY=
+
+# ---- 赛后战报专用模型（可选）----
+# 留空则使用胜者国家的模型；REPORT_PROVIDER=none 可禁用 AI 战报
+REPORT_PROVIDER=
+REPORT_MODEL=
+REPORT_API_KEY=
 ```
 
 > DeepSeek 目前**没有 embedding 接口**，所以 embedding 默认用智谱 GLM 的 `embedding-3`（需要 `ZHIPUAI_API_KEY`）。想免费本地运行可设 `EMBEDDING_PROVIDER=ollama`（默认模型 `qwen3-embedding:0.6b`）。
@@ -218,6 +227,12 @@ export MOONSHOT_API_KEY="..."
 # 命令行运行完整模拟（默认 20 回合，实时打印）
 ./myenv/bin/python main.py
 
+# 从存档继续对局（--autosave 每回合写 saves/autosave.json）
+./myenv/bin/python main.py --load autosave --autosave
+
+# 按路径读档并把回合上限调大后继续
+./myenv/bin/python main.py --load saves/20260920-120000-my-game.json --max-turns 40
+
 # 停止 Web 服务器
 pkill -f web.server
 
@@ -230,21 +245,40 @@ curl http://127.0.0.1:8000/api/stop
 
 1. 顶部设置 `Max turns`，点击 **Start**。
    - 右上角的 **中文 / EN** 按钮可切换界面语言：切到中文后，除界面文案外，模型生成的 plan / 反思 / action reason 也会用简体中文输出（通过提示词指令实现）。语言选择不做持久化，刷新后默认英文。
-2. **Use API models** 关闭时使用本地 Ollama；打开后每个国家可分别选择 Zhipu / DeepSeek / Qwen / Kimi，可全选相同或各选不同。页面初次加载时会按 `.env` 的默认/每国配置预选。
+2. **Use API models** 关闭时使用本地 Ollama；打开后每个国家可分别选择 Zhipu / DeepSeek / Qwen / Kimi，可全选相同或各选不同。页面初次加载时会按 `.env` 的默认/每国配置预选。同一面板下方还有 **Report model** 选择器，用于指定**赛后战报**使用的模型（自动=胜者模型 / 指定提供商 / 关闭），默认「自动」。
 3. 在 “API Keys” 区域为所选提供商填入密钥（留空则回退到系统环境变量 / `.env`）；都缺失时页面会提示，服务端在启动模拟时也会返回错误。
 4. **Interrupt** 按钮可请求中断：当前正在生成的智能体完成后停止，界面显示 `interrupted`。
 5. 右侧 Live Feed 实时显示行动、结果、Plan 与 Reflection，并用高亮广播重要事件（城市被攻占、首都被占领/夺回/吞并、单位被歼灭、势力被淘汰）；左侧自上而下为**实时排名面板**、世界地图、国家面板与关系矩阵。国家卡片可点击标题折叠/展开，排名面板按分数显示名次、城市数与领地数并高亮领先者。
 6. 模型输出（planning / reflecting / acting）以可折叠面板实时流式显示：生成中自动展开并逐 token 刷新，结束后自动收起，点击标题可随时展开查看完整内容。
 7. **观战模式**：点击顶部 **观战模式 / Spectator**，隐藏配置面板，让六边形地图与 Live Feed 铺满整屏；再次点击退出。
 8. **可交互地图**：拖拽平移、滚轮缩放、**重置视图**按钮复位；点击任意六边形在下方信息框查看城市/地形、归属、资源与驻扎单位。
+9. **存档 / 读档**：顶部 **Save** 立即保存当前对局；**Saves** 打开存档列表，可 **Continue** 继续或 **Delete** 删除。中断对局会自动写入 `saves/autosave.json`。继续已结束的存档时，把 `Max turns` 调到大于存档回合数即可续打。
+10. **赛后报告**：对局结束（或中断）后自动弹出报告弹窗，含分数增长曲线与战报；关闭后可用顶部 **Report** 按钮重新打开。
 
 > 注意：SSE 客户端断开不会自动取消后台模拟；请使用 Interrupt 按钮或 `/api/stop`。
+
+## 赛后报告
+
+对局结束或中断时，服务端会生成一份报告并随最终事件下发，Web UI 会自动弹出全屏弹窗，也可用顶部 **Report** 按钮重开：
+
+- **分数增长曲线**：纯前端 SVG 绘制，x 轴为回合、y 轴为分数，四个国家各一条折线；在城市易主、首都失守/夺回/吞并、势力淘汰等**重大事件**处画竖虚线并在对应曲线上标记（鼠标悬停查看详情）。
+- **新闻报道式战报**：优先用当前对局中的模型以"战地记者"口吻撰写（含标题、导语、经过、结果，语言随界面中/英切换）；模型不可用、超时或输出无法解析时，**自动回退**到由事件时间线拼装的模板战报，保证一定有内容。战报始终附带确定性的**重大事件时间线**与最终结果。
+- **战报专用模型**：可在 Models 面板的 **Report model** 选择器里指定（默认「自动」= 使用胜者国家的模型，可选具体提供商，或选「关闭」不生成 AI 战报）；也可在 `.env` 用 `REPORT_PROVIDER` / `REPORT_MODEL` / `REPORT_API_KEY` 固定一个专用模型。优先级：Web UI 选择 > `.env` > 胜者模型。
+
+## 存档 / 读档
+
+- 存档文件为 JSON（默认目录 `saves/`，已在 `.gitignore` 中忽略），保存了世界（地块/城市/单位/关系/历史/分数曲线）与各国记忆；**不保存 API Key**，读档时仍需提供密钥（Web UI 输入或环境变量）。
+- 存档总是在**回合边界**生成，因此读档即从下一回合干净地继续；分数曲线与战报会包含续档前后的**完整历史**。
+- Web UI：`POST /api/save` 保存、`GET /api/saves` 列表、`GET /api/load?id=...` 续档（复用同一 SSE 事件流）、`DELETE /api/saves?id=...` 删除；中断时自动写 `saves/autosave.json`。
+- 命令行：`main.py --load <id|path>` 续档，`--autosave` 每回合写 `saves/autosave.json`，`--save-dir` 指定目录，`--max-turns` 覆盖回合上限（可用于继续已结束的对局）。
 
 ## 项目结构
 
 ```
-main.py                      # 命令行入口
+main.py                      # 命令行入口（支持 --load / --autosave / --save-dir）
 engine/simulation_loop.py    # 回合引擎 + 事件发射（CLI / Web 共用）
+engine/report.py             # 赛后战报：模板生成 + LLM 撰写与回退
+engine/savegame.py           # 存档序列化 / 反序列化 / 原子写盘
 world/hexmap.py              # 六边形坐标/邻接/方向 + 欧洲城市布局 + 地图生成
 world/environment.py         # World：城市/地块/单位、行动结算、评分、快照
 agent/
@@ -255,11 +289,16 @@ agent/
   tools.py                   # 动作工具工厂 make_tools(world, agent)
   persona.py / goals.py / prompt.py
 agent_graph/graph.py         # StateGraph: observe/reflect/plan/act/tools/collect
-agent_memory/memory_store.py # FAISS 记忆存储
+agent_memory/memory_store.py # FAISS 记忆存储（支持导出/导入）
 web/
-  server.py                  # FastAPI + SSE 服务
+  server.py                  # FastAPI + SSE 服务 + 存档接口
   index.html                 # 实时对战前端
-.env.example                 # .env 配置模板（.env 已被 .gitignore 忽略）
+  report.js                  # 前端纯函数：分数曲线、战报渲染（可被 node 测试）
+tests/                       # Python 测试（pytest，离线）
+web/tests/                   # 前端测试（node --test）
+run_tests.ps1 / run_tests.sh # 一键跑全部测试
+requirements-dev.txt         # 测试依赖（pytest）
+.env.example                 # .env 配置模板（.env/saves 已被 .gitignore 忽略）
 requirements.txt
 ```
 
@@ -268,6 +307,8 @@ requirements.txt
 - `.env`：API Key、对话模型（全局默认 + 每国覆盖）、embedding 模型；由 `python-dotenv` 自动加载。
 - `DEFAULT_PROVIDER` / `DEFAULT_MODEL`：默认对话模型；`GERMANY_*` / `FRANCE_*` / `UK_*` / `USSR_*` 可逐国覆盖。
 - `EMBEDDING_PROVIDER` / `EMBEDDING_MODEL`：智能体记忆用的 embedding，默认 `zhipu` / `embedding-3`。
+- `REPORT_PROVIDER` / `REPORT_MODEL`：赛后战报的专用模型（provider 可填 `ollama|zhipu|deepseek|qwen|kimi`）。留空则使用胜者国家的模型；`REPORT_PROVIDER=none` 可禁用 AI 战报（仍会生成模板战报）。
+- `REPORT_API_KEY`：可选，仅为战报模型使用的 API Key；不填则沿用该 provider 的正常密钥（Web UI / 环境变量 / `.env`）。
 - `MAP_SEED`：可选，固定地图随机种子（地块资源值），便于复现同一张地图；不设置则每次随机。
 - `ATTACK_ATTRITION`（0.3）：获胜方损失败方强度的比例。
 - `CITY_LOOT_RATE`（0.3）：夺城时掠夺城市资源的比例。
@@ -287,3 +328,25 @@ requirements.txt
 - `REFLECT_EVERY`：默认每 3 回合反思一次（`agent_graph/graph.py`）。
 - 目标权重：`primary 0.5 / secondary 0.3 / tertiary 0.2`（`world/environment.py`）。
 - 本地代理：若系统开启了全局代理，Python httpx 可能把 `127.0.0.1` 也走代理导致 Ollama 502。`agent/llm_factory.py` 已自动为 `127.0.0.1` / `localhost` / `::1` 设置 `NO_PROXY`。
+
+## 测试
+
+测试**全部离线、确定性**（固定 `MAP_SEED`，使用脚本化的假智能体），不需要 Ollama、API Key 或网络。
+
+```bash
+# 安装测试依赖
+./myenv/bin/pip install -r requirements-dev.txt
+
+# 一键运行全部测试（Python + 前端）
+./run_tests.sh          # macOS / Linux
+./run_tests.ps1         # Windows PowerShell
+
+# 或分别运行
+./myenv/bin/python -m pytest -q     # Python：世界规则、时间线、存档往返、续档、战报、服务端接口
+node --test web/tests               # 前端：分数曲线、战报渲染、事件文案（node 内置 runner）
+```
+
+- `tests/`：`test_world_rules.py`（战斗/占领/吞并/淘汰/计分）、`test_timeline.py`（事件日志与分数历史）、`test_savegame.py`（序列化往返、原子写、损坏文件）、`test_simulation_loop.py`（完整生命周期与检查点）、`test_resume.py`（续档连贯性）、`test_report.py`（模板/LLM 回退）、`test_server.py`（存档 API）。
+- `web/tests/report.test.js`：前端纯函数测试。
+- CI：`.github/workflows/tests.yml` 在 push / PR 时分别运行 Python 与 Node 测试。
+

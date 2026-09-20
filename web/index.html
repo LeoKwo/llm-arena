@@ -304,6 +304,54 @@
   }
   .final { text-align: center; }
   .final .winner { font-size: 22px; font-weight: 800; margin: 6px 0; }
+  /* --- End-of-game report & save dialogs --- */
+  .modal {
+    position: fixed; inset: 0; background: rgba(5, 7, 10, 0.78);
+    display: none; align-items: flex-start; justify-content: center;
+    z-index: 50; padding: 24px; overflow: auto;
+  }
+  .modal.open { display: flex; }
+  .modal-card {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 12px; width: min(980px, 100%);
+    padding: 18px 20px; box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+  }
+  .modal-head { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+  .modal-head h2 { margin: 0; font-size: 15px; letter-spacing: 0.5px; }
+  .modal-head .spacer { flex: 1; }
+  .modal-close { background: var(--panel-2); color: var(--text); border: 1px solid var(--border); }
+  .chart-wrap { background: #0b0e13; border: 1px solid var(--border); border-radius: 10px; padding: 8px; margin-bottom: 16px; }
+  .scorechart { width: 100%; height: auto; display: block; }
+  .chart-grid { stroke: var(--border); stroke-width: 1; opacity: 0.7; }
+  .chart-grid.faint { opacity: 0.3; }
+  .chart-axis { fill: var(--muted); font-size: 11px; }
+  .chart-event { stroke: #e5c07b; stroke-width: 1.2; stroke-dasharray: 4 4; opacity: 0.85; }
+  .chart-empty { color: var(--muted); padding: 30px; text-align: center; }
+  .newsreport { line-height: 1.6; }
+  .newsreport .nr-top { display: flex; align-items: baseline; gap: 10px; }
+  .newsreport h3 { margin: 0; font-size: 20px; }
+  .newsreport .nr-src {
+    margin-left: auto; font-size: 11px; color: var(--muted);
+    border: 1px solid var(--border); border-radius: 10px; padding: 2px 8px; white-space: nowrap;
+  }
+  .newsreport .nr-dateline { color: var(--muted); font-size: 12px; margin: 4px 0 10px; }
+  .newsreport .nr-lead { font-weight: 600; }
+  .newsreport h4 { margin: 16px 0 6px; font-size: 12px; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); }
+  .newsreport .nr-timeline { list-style: none; padding: 0; margin: 0; }
+  .newsreport .nr-timeline li { padding: 4px 0; border-bottom: 1px dashed var(--border); font-size: 13px; }
+  .newsreport .tl-turn { color: #e5c07b; font-weight: 700; margin-right: 6px; font-variant-numeric: tabular-nums; }
+  .newsreport .nr-outcome { margin-top: 14px; padding-top: 10px; border-top: 1px solid var(--border); font-weight: 700; }
+  .save-list { display: flex; flex-direction: column; gap: 8px; }
+  .save-row {
+    display: flex; align-items: center; gap: 10px;
+    background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; padding: 10px;
+  }
+  .save-row .meta { flex: 1; min-width: 0; }
+  .save-row .name { font-weight: 700; }
+  .save-row .sub { color: var(--muted); font-size: 11px; word-break: break-all; }
+  .save-row .badge-end { color: var(--ok); font-size: 11px; font-weight: 600; }
+  .save-row button { padding: 5px 12px; font-size: 12px; }
+  .save-row button.danger { background: var(--danger); color: #fff; }
 </style>
 </head>
 <body>
@@ -313,6 +361,9 @@
   <div id="status" class="status" data-i18n="status_idle">idle</div>
   <div class="spacer"></div>
   <button id="spectate" class="btn-lang" type="button" data-i18n="spectator">Spectator</button>
+  <button id="reportbtn" class="btn-lang" type="button" data-i18n="report" style="display:none">Report</button>
+  <button id="savebtn" class="btn-lang" type="button" data-i18n="save">Save</button>
+  <button id="savesbtn" class="btn-lang" type="button" data-i18n="saves">Saves</button>
   <button id="langtoggle" class="btn-lang" type="button">中文</button>
   <label><span data-i18n="max_turns">Max turns</span> <input id="maxturns" type="number" value="10" min="1" max="100" /></label>
   <button id="start" data-i18n="start">Start</button>
@@ -366,6 +417,30 @@
   </section>
 </main>
 
+<div class="modal" id="reportmodal">
+  <div class="modal-card">
+    <div class="modal-head">
+      <h2 data-i18n="report_title">After-Action Report</h2>
+      <div class="spacer"></div>
+      <button class="modal-close" type="button" data-close="reportmodal" data-i18n="close">Close</button>
+    </div>
+    <div class="chart-wrap" id="reportchart"></div>
+    <div id="reportbody"></div>
+  </div>
+</div>
+
+<div class="modal" id="savesmodal">
+  <div class="modal-card">
+    <div class="modal-head">
+      <h2 data-i18n="saves_title">Saved games</h2>
+      <div class="spacer"></div>
+      <button class="modal-close" type="button" data-close="savesmodal" data-i18n="close">Close</button>
+    </div>
+    <div class="save-list" id="savelist"></div>
+  </div>
+</div>
+
+<script src="/report.js"></script>
 <script>
 const PALETTE = ["#e06c75", "#61afef", "#98c379", "#e5c07b", "#c678dd", "#56b6c2"];
 const NATION_COLORS = {};
@@ -374,6 +449,7 @@ let providerInfo = null;
 let localDefaults = {};
 let apiDefaults = {};
 let envDefaults = {};
+let reportDefaults = {};
 let source = null;
 const nationEls = {};
 const liveThink = {};
@@ -459,9 +535,36 @@ const I18N = {
       `Missing API key for: ${list}. Paste it above or set the env var before running.`,
     bc_city_captured: (a, c, f) => `${a} captured ${c}${f ? ` from ${f}` : ""}!`,
     bc_capital_fallen: (o, c, by) => `${o}'s capital ${c} has fallen to ${by}!`,
+    bc_capital_captured: (o, c, by) => `${o}'s capital ${c} has fallen to ${by}!`,
     bc_capital_retaken: (o, c) => `${o} recaptured its capital ${c}!`,
+    bc_capital_annexed: (a, o, c) =>
+      `${a} annexed ${o} (capital ${c} and all its cities)!`,
     bc_eliminated: (a) => `${a} has been eliminated!`,
     bc_unit_destroyed: (a, u, v) => `${a} destroyed ${v}'s unit ${u}!`,
+    save: "Save",
+    saves: "Saves",
+    report: "Report",
+    report_title: "After-Action Report",
+    report_empty: "The report will appear when the simulation ends.",
+    report_timeline: "Timeline of major events",
+    report_source_llm: "AI dispatch",
+    report_source_template: "Auto-generated",
+    report_model: "Report model",
+    report_model_auto: "Auto (winner's model)",
+    report_model_off: "Off (no AI report)",
+    reporting: "Writing the end-of-game report...",
+    saves_title: "Saved games",
+    saves_empty: "No saved games yet.",
+    save_continue: "Continue",
+    save_delete: "Delete",
+    save_saved: (id) => `Saved as ${id}.`,
+    save_autosaved: (id) => `Autosaved as ${id}.`,
+    save_failed: (m) => `Save failed: ${m}`,
+    load_failed: (m) => `Could not load save: ${m}`,
+    resumed_generic: "Resumed a saved game.",
+    save_turn: (t) => `turn ${t + 1}`,
+    save_ended_badge: "finished",
+    close: "Close",
   },
   zh: {
     turn: "回合",
@@ -540,9 +643,35 @@ const I18N = {
       `缺少以下提供商的 API 密钥：${list}。请在上方填写，或先设置环境变量再运行。`,
     bc_city_captured: (a, c, f) => `${a} 攻占了 ${c}${f ? `（原属 ${f}）` : ""}！`,
     bc_capital_fallen: (o, c, by) => `${o} 的首都 ${c} 陷落，被 ${by} 占领！`,
+    bc_capital_captured: (o, c, by) => `${o} 的首都 ${c} 陷落，被 ${by} 占领！`,
     bc_capital_retaken: (o, c) => `${o} 夺回了首都 ${c}！`,
+    bc_capital_annexed: (a, o, c) => `${a} 吞并了 ${o}（首都 ${c} 及全部城市）！`,
     bc_eliminated: (a) => `${a} 已被淘汰！`,
     bc_unit_destroyed: (a, u, v) => `${a} 消灭了 ${v} 的单位 ${u}！`,
+    save: "存档",
+    saves: "存档列表",
+    report: "赛事报告",
+    report_title: "赛后报告",
+    report_empty: "对局结束后将生成报告。",
+    report_timeline: "重大事件时间线",
+    report_source_llm: "AI 报道",
+    report_source_template: "自动生成",
+    report_model: "战报模型",
+    report_model_auto: "自动（胜者模型）",
+    report_model_off: "关闭（不生成 AI 战报）",
+    reporting: "正在撰写赛后战报…",
+    saves_title: "已保存的对局",
+    saves_empty: "暂无存档。",
+    save_continue: "继续",
+    save_delete: "删除",
+    save_saved: (id) => `已保存为 ${id}。`,
+    save_autosaved: (id) => `已自动保存为 ${id}。`,
+    save_failed: (m) => `保存失败：${m}`,
+    load_failed: (m) => `读取存档失败：${m}`,
+    resumed_generic: "已从存档继续对局。",
+    save_turn: (t) => `第 ${t + 1} 回合`,
+    save_ended_badge: "已结束",
+    close: "关闭",
   },
 };
 
@@ -561,21 +690,7 @@ let currentStatus = { key: "status_idle", cls: "" };
 const collapsedNations = new Set();
 
 function formatBroadcast(b) {
-  const d = b || {};
-  switch (d.kind) {
-    case "city_captured":
-      return t("bc_city_captured", d.actor, d.city, d.previous || "");
-    case "capital_fallen":
-      return t("bc_capital_fallen", d.owner, d.city, d.by);
-    case "capital_retaken":
-      return t("bc_capital_retaken", d.owner, d.city);
-    case "faction_eliminated":
-      return t("bc_eliminated", d.actor);
-    case "unit_destroyed":
-      return t("bc_unit_destroyed", d.actor, d.unit, d.victim);
-    default:
-      return d.kind || "";
-  }
+  return ArenaReport.formatBroadcast(b, t);
 }
 
 function colorFor(name) {
@@ -733,6 +848,7 @@ async function loadProviders() {
     localDefaults = data.defaults.local || {};
     apiDefaults = data.defaults.api || {};
     envDefaults = data.defaults.env || {};
+    reportDefaults = data.defaults.report || {};
   } catch (err) {
     providerInfo = { ollama: { label: "Local (Ollama)", configured: true } };
   }
@@ -750,6 +866,10 @@ function applyEnvDefaults() {
     if (!select || !conf || !conf.provider) return;
     if (providerInfo[conf.provider]) select.value = conf.provider;
   });
+  const reportSelect = el("sel-report");
+  if (reportSelect && reportDefaults && reportDefaults.provider) {
+    if (providerInfo[reportDefaults.provider]) reportSelect.value = reportDefaults.provider;
+  }
 }
 
 function buildApiKeyFields() {
@@ -825,6 +945,20 @@ function optionList(selected) {
   }).join("");
 }
 
+function reportOptionList(selected) {
+  const options = [
+    `<option value="auto"${selected === "auto" ? " selected" : ""}>${t("report_model_auto")}</option>`,
+    `<option value="none"${selected === "none" ? " selected" : ""}>${t("report_model_off")}</option>`,
+  ];
+  Object.entries(providerInfo || {}).forEach(([key, info]) => {
+    const label = info.label + (info.configured === false ? t("key_missing_suffix") : "");
+    options.push(
+      `<option value="${key}"${key === selected ? " selected" : ""}>${label}</option>`
+    );
+  });
+  return options.join("");
+}
+
 function buildModelGrid() {
   const grid = el("modelgrid");
   grid.innerHTML = "";
@@ -838,6 +972,17 @@ function buildModelGrid() {
     select.innerHTML = optionList("ollama");
     select.addEventListener("change", updateKeyWarning);
   });
+
+  const reportCell = document.createElement("div");
+  reportCell.className = "model-cell";
+  reportCell.innerHTML =
+    `<label><span class="nation-name" data-i18n="report_model">${t("report_model")}</span></label>` +
+    `<select id="sel-report"></select>`;
+  grid.appendChild(reportCell);
+  const reportSelect = reportCell.querySelector("select");
+  reportSelect.innerHTML = reportOptionList("auto");
+  reportSelect.addEventListener("change", updateKeyWarning);
+
   applyToggle();
 }
 
@@ -865,6 +1010,11 @@ function refreshOptionLabels() {
       opt.textContent = info.label + (apiKeyReady(opt.value) ? "" : t("key_missing_suffix"));
     });
   });
+  const reportSelect = el("sel-report");
+  if (reportSelect) {
+    const current = reportSelect.value || "auto";
+    reportSelect.innerHTML = reportOptionList(current);
+  }
 }
 
 function updateKeyWarning() {
@@ -1213,7 +1363,11 @@ function handle(event) {
     case "init":
       renderNations(event.nations, event.world);
       setStatus("status_running", "running");
-      log(t("sim_started", event.max_turns), "system");
+      if (event.resumed) {
+        log(t("resumed_generic"), "system");
+      } else {
+        log(t("sim_started", event.max_turns), "system");
+      }
       break;
     case "turn_start":
       clearThinking();
@@ -1262,12 +1416,19 @@ function handle(event) {
       break;
     case "standings":
       break;
+    case "reporting":
+      log(t("reporting"), "system");
+      break;
+    case "saved":
+      log(event.auto ? t("save_autosaved", event.save.id) : t("save_saved", event.save.id), "system");
+      break;
     case "interrupted": {
       setStatus("status_interrupted", "done");
       clearThinking();
       log(t("sim_interrupted"), "system");
       if (source) { source.close(); source = null; }
       setRunning(false);
+      captureReport(event);
       break;
     }
     case "end": {
@@ -1285,6 +1446,7 @@ function handle(event) {
       );
       if (source) { source.close(); source = null; }
       setRunning(false);
+      captureReport(event);
       break;
     }
     case "error":
@@ -1296,38 +1458,58 @@ function handle(event) {
   }
 }
 
-async function start() {
-  if (source) return;
-  const maxTurns = parseInt(el("maxturns").value || "10", 10);
-  const params = new URLSearchParams({ max_turns: maxTurns, lang: lang });
-  SLUGS.forEach(([slug]) => {
-    const select = el("sel-" + slug);
-    params.set(slug, select ? select.value : "ollama");
+let lastReport = null;
+let lastTimeline = null;
+
+function showModal(id) { el(id).classList.add("open"); }
+function hideModal(id) { el(id).classList.remove("open"); }
+
+function captureReport(event) {
+  if (!event) return;
+  lastReport = event.report || lastReport;
+  lastTimeline = event.timeline || lastTimeline;
+  const btn = el("reportbtn");
+  if (btn && (lastReport || lastTimeline)) btn.style.display = "";
+  if (lastReport || lastTimeline) showReport();
+}
+
+function showReport() {
+  if (!lastReport && !lastTimeline) return;
+  const nationNames = Object.keys(lastNations || (lastWorld && lastWorld.agents) || {});
+  el("reportchart").innerHTML = ArenaReport.buildScoreChartSvg(lastTimeline, {
+    nations: nationNames,
+    colorFor: colorFor,
+    t: t,
+    emptyText: t("report_empty"),
   });
-  clearLog();
-  setStatus("status_connecting", "running");
-  setRunning(true);
+  el("reportbody").innerHTML = lastReport
+    ? ArenaReport.buildReportHtml(lastReport, { t: t })
+    : `<div class="chart-empty">${ArenaReport.escapeHtml(t("report_empty"))}</div>`;
+  showModal("reportmodal");
+}
 
+async function submitApiKeys() {
   const keys = collectApiKeys();
-  if (Object.keys(keys).length) {
-    try {
-      const res = await fetch("/api/keys", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ keys }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-      if (data.providers) { providerInfo = data.providers; updateKeyBadges(); updateKeyWarning(); }
-    } catch (err) {
-      setStatus("status_error", "error");
-      log(t("keys_save_failed", err.message), "error");
-      setRunning(false);
-      return;
-    }
+  if (!Object.keys(keys).length) return true;
+  try {
+    const res = await fetch("/api/keys", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ keys }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    if (data.providers) { providerInfo = data.providers; updateKeyBadges(); updateKeyWarning(); }
+    return true;
+  } catch (err) {
+    setStatus("status_error", "error");
+    log(t("keys_save_failed", err.message), "error");
+    setRunning(false);
+    return false;
   }
+}
 
-  source = new EventSource(`/api/run?${params.toString()}`);
+function wireSource() {
   source.onmessage = (e) => {
     if (!e.data) return;
     try { handle(JSON.parse(e.data)); } catch (err) { console.error(err, e.data); }
@@ -1337,7 +1519,136 @@ async function start() {
   };
 }
 
+async function saveGame() {
+  try {
+    const res = await fetch("/api/save", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: `turn-${el("turn").textContent || "0"}` }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    log(t("save_saved", data.save.id), "system");
+  } catch (err) {
+    log(t("save_failed", err.message), "error");
+  }
+}
+
+async function openSaves() {
+  showModal("savesmodal");
+  const box = el("savelist");
+  box.innerHTML = `<div class="hint">${t("saves_empty")}</div>`;
+  try {
+    const res = await fetch("/api/saves");
+    const data = await res.json();
+    renderSaves(data.saves || []);
+  } catch (err) {
+    box.innerHTML = `<div class="error">${t("load_failed", err.message)}</div>`;
+  }
+}
+
+function renderSaves(saves) {
+  const box = el("savelist");
+  if (!saves.length) {
+    box.innerHTML = `<div class="hint">${t("saves_empty")}</div>`;
+    return;
+  }
+  box.innerHTML = "";
+  const esc = ArenaReport.escapeHtml;
+  saves.forEach((s) => {
+    const row = document.createElement("div");
+    row.className = "save-row";
+    const created = s.created ? new Date(s.created * 1000).toLocaleString() : "";
+    const models = Object.values(s.models || {})
+      .map((m) => m && m.model)
+      .filter((v, i, a) => v && a.indexOf(v) === i)
+      .join(", ");
+    row.innerHTML =
+      `<div class="meta"><div class="name">${esc(s.name || s.id)} ` +
+      `${s.ended ? `<span class="badge-end">${esc(t("save_ended_badge"))}</span>` : ""}</div>` +
+      `<div class="sub">${esc(s.id)} · ${esc(t("save_turn", s.turn || 0))} / ${esc(s.max_turns || "?")}</div>` +
+      `<div class="sub">${esc(created)}${models ? " · " + esc(models) : ""}</div></div>`;
+    const cont = document.createElement("button");
+    cont.textContent = t("save_continue");
+    cont.addEventListener("click", () => loadSave(s));
+    const del = document.createElement("button");
+    del.className = "danger";
+    del.textContent = t("save_delete");
+    del.addEventListener("click", () => deleteSave(s.id));
+    row.appendChild(cont);
+    row.appendChild(del);
+    box.appendChild(row);
+  });
+}
+
+async function deleteSave(id) {
+  try {
+    await fetch(`/api/saves?id=${encodeURIComponent(id)}`, { method: "DELETE" });
+  } catch (err) {
+    console.error(err);
+  }
+  openSaves();
+}
+
+async function loadSave(save) {
+  if (source) return;
+  hideModal("savesmodal");
+  clearLog();
+  lastReport = null;
+  lastTimeline = null;
+  el("reportbtn").style.display = "none";
+  setStatus("status_connecting", "running");
+  setRunning(true);
+
+  const savedMax = save.max_turns || (save.turn || 0) + 10;
+  const input = el("maxturns");
+  if (parseInt(input.value || "0", 10) < savedMax) input.value = savedMax;
+  const maxTurns = parseInt(input.value || String(savedMax), 10);
+
+  if (!(await submitApiKeys())) return;
+
+  const params = new URLSearchParams({ max_turns: maxTurns, lang: lang, id: save.id });
+  const reportSelect = el("sel-report");
+  if (reportSelect) params.set("report_provider", reportSelect.value);
+  source = new EventSource(`/api/load?${params.toString()}`);
+  wireSource();
+}
+
+async function start() {
+  if (source) return;
+  const maxTurns = parseInt(el("maxturns").value || "10", 10);
+  const params = new URLSearchParams({ max_turns: maxTurns, lang: lang });
+  SLUGS.forEach(([slug]) => {
+    const select = el("sel-" + slug);
+    params.set(slug, select ? select.value : "ollama");
+  });
+  const reportSelect = el("sel-report");
+  if (reportSelect) params.set("report_provider", reportSelect.value);
+  clearLog();
+  lastReport = null;
+  lastTimeline = null;
+  el("reportbtn").style.display = "none";
+  setStatus("status_connecting", "running");
+  setRunning(true);
+
+  if (!(await submitApiKeys())) return;
+
+  source = new EventSource(`/api/run?${params.toString()}`);
+  wireSource();
+}
+
 el("start").addEventListener("click", start);
+el("savebtn").addEventListener("click", saveGame);
+el("savesbtn").addEventListener("click", openSaves);
+el("reportbtn").addEventListener("click", showReport);
+document.querySelectorAll("[data-close]").forEach((btn) => {
+  btn.addEventListener("click", () => hideModal(btn.getAttribute("data-close")));
+});
+document.querySelectorAll(".modal").forEach((modal) => {
+  modal.addEventListener("click", (e) => {
+    if (e.target === modal) hideModal(modal.id);
+  });
+});
 el("stop").addEventListener("click", async () => {
   el("stop").disabled = true;
   setStatus("status_stopping", "running");

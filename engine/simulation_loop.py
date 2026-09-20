@@ -4,6 +4,12 @@ from agent.init_agents import (
     build_all_agents,
 )
 from agent.llm_factory import build_embeddings
+from engine.report import generate_report
+from engine.savegame import (
+    build_save_payload,
+    deserialize_world,
+    load_agents_memory,
+)
 from world.environment import build_default_world
 
 MAX_TURNS = 20
@@ -35,10 +41,37 @@ def _print_event(event):
             f"{name}={score:.0f}" for name, score in event.get("rankings", [])
         )
         print(f"  [standings] {standings}", flush=True)
-    elif kind == "end":
-        print(f"\nSimulation ended. Winner: {event.get('winner')}", flush=True)
+    elif kind == "reporting":
+        print("\nWriting the end-of-game report...", flush=True)
+    elif kind in {"end", "interrupted"}:
+        winner = event.get("winner")
+        prefix = "Simulation ended" if kind == "end" else "Simulation interrupted"
+        print(f"\n{prefix}. Winner: {winner}", flush=True)
+        _print_report(event.get("report"))
     elif kind == "error":
         print(f"\nERROR: {event.get('message')}", flush=True)
+
+
+def _print_report(report):
+    if not report:
+        return
+    print("\n" + "=" * 60, flush=True)
+    print(report.get("headline", ""), flush=True)
+    print(report.get("dateline", ""), flush=True)
+    print("-" * 60, flush=True)
+    if report.get("lead"):
+        print(report["lead"], flush=True)
+    for paragraph in report.get("paragraphs", []):
+        print(paragraph, flush=True)
+    timeline = report.get("timeline", [])
+    if timeline:
+        print("-" * 60, flush=True)
+        for entry in timeline:
+            print(entry.get("text", ""), flush=True)
+    if report.get("outcome"):
+        print("-" * 60, flush=True)
+        print(report["outcome"], flush=True)
+    print("=" * 60, flush=True)
 
 
 def nation_metadata(model_config=None):
@@ -58,6 +91,43 @@ def nation_metadata(model_config=None):
     return metadata
 
 
+def _resolve_max_turns(max_turns, resume):
+    if max_turns is not None:
+        return int(max_turns)
+    if resume and resume.get("max_turns"):
+        return int(resume["max_turns"])
+    return MAX_TURNS
+
+
+def _resolve_model_config(model_config, resume):
+    if model_config:
+        return model_config
+    if not resume:
+        return model_config
+    saved = resume.get("models") or {}
+    resolved = {
+        name: {"provider": spec.get("provider"), "model": spec.get("model")}
+        for name, spec in saved.items()
+        if spec.get("provider")
+    }
+    return resolved or model_config
+
+
+def _report_llm(agents, winner):
+    """Pick a model to write the news report (winner first, then any)."""
+    order = []
+    if winner and winner in agents:
+        order.append(winner)
+    order.extend(name for name in agents if name not in order)
+    for name in order:
+        bundle = agents.get(name, {})
+        llm = bundle.get("llm")
+        if llm is not None:
+            label = f"{bundle.get('provider') or '?'}/{bundle.get('model') or '?'}"
+            return llm, label
+    return None, None
+
+
 def run(
     max_turns=MAX_TURNS,
     verbose=True,
@@ -65,6 +135,14 @@ def run(
     model_config=None,
     should_stop=None,
     lang="en",
+    resume=None,
+    on_checkpoint=None,
+    embeddings=None,
+    world_factory=None,
+    agent_factory=None,
+    report_llm=None,
+    report_label=None,
+    report_enabled=True,
 ):
     def emit(event):
         if on_event is not None:
@@ -75,11 +153,49 @@ def run(
     def stop_requested():
         return bool(should_stop and should_stop())
 
+    world_factory = world_factory or build_default_world
+    agent_factory = agent_factory or build_all_agents
+    max_turns = _resolve_max_turns(max_turns, resume)
+    model_config = _resolve_model_config(model_config, resume)
+
+    def end_event(kind, winner):
+        if kind == "end":
+            emit({"type": "reporting", "winner": winner})
+            if report_llm is not None:
+                llm, label = report_llm, report_label
+            elif report_enabled:
+                llm, label = _report_llm(agents, winner)
+            else:
+                llm, label = None, None
+            report = generate_report(world, winner, llm=llm, lang=lang)
+            if report.get("source") == "llm" and label:
+                report["model"] = label
+        else:
+            report = generate_report(world, None, llm=None, lang=lang)
+        return {
+            "type": kind,
+            "winner": winner,
+            "world": world.snapshot(),
+            "rankings": world.rankings(),
+            "timeline": world.timeline(),
+            "report": report,
+        }
+
     try:
-        embeddings = build_embeddings()
-        world = build_default_world()
+        if resume:
+            world = deserialize_world(resume["world"])
+        else:
+            world = world_factory()
+        if resume and world.turn > max_turns:
+            # Keep an explicit (possibly smaller) request sane: never truncate
+            # past the point the save reached.
+            max_turns = world.turn
         world.max_turns = max_turns
-        agents = build_all_agents(
+
+        if embeddings is None:
+            embeddings = build_embeddings()
+
+        agents = agent_factory(
             world,
             embeddings,
             model_config=model_config,
@@ -87,18 +203,30 @@ def run(
             on_event=on_event,
             lang=lang,
         )
-        carry = {name: [] for name in agents}
+        if resume:
+            load_agents_memory(agents, resume.get("agents", {}))
 
-        emit(
-            {
-                "type": "init",
-                "nations": nation_metadata(model_config),
-                "world": world.snapshot(),
-                "max_turns": max_turns,
-            }
-        )
+        carry = {
+            name: list(bundle.get("memory").reflections)
+            if bundle.get("memory") is not None
+            else []
+            for name, bundle in agents.items()
+        }
 
-        for turn in range(max_turns):
+        start_turn = world.turn if resume else 0
+
+        init_event = {
+            "type": "init",
+            "nations": nation_metadata(model_config),
+            "world": world.snapshot(),
+            "max_turns": max_turns,
+            "resumed": bool(resume),
+        }
+        if resume:
+            init_event["timeline"] = world.timeline()
+        emit(init_event)
+
+        for turn in range(start_turn, max_turns):
             if stop_requested():
                 break
             world.turn = turn
@@ -117,13 +245,7 @@ def run(
                 if not world.agents[name]["alive"]:
                     continue
                 if stop_requested():
-                    emit(
-                        {
-                            "type": "interrupted",
-                            "world": world.snapshot(),
-                            "rankings": world.rankings(),
-                        }
-                    )
+                    emit(end_event("interrupted", None))
                     return None
                 emit({"type": "agent_thinking", "agent": name, "turn": turn})
                 world.begin_turn(name)
@@ -166,36 +288,24 @@ def run(
             emit({"type": "standings", "rankings": world.rankings()})
 
             ended, winner = world.check_end_conditions()
-            if ended:
-                emit(
-                    {
-                        "type": "end",
-                        "winner": winner,
-                        "world": world.snapshot(),
-                        "rankings": world.rankings(),
-                    }
+            if on_checkpoint is not None:
+                on_checkpoint(
+                    build_save_payload(
+                        world,
+                        agents,
+                        {"lang": lang, "ended": ended, "winner": winner},
+                    )
                 )
+            if ended:
+                emit(end_event("end", winner))
                 return winner
 
         if stop_requested():
-            emit(
-                {
-                    "type": "interrupted",
-                    "world": world.snapshot(),
-                    "rankings": world.rankings(),
-                }
-            )
+            emit(end_event("interrupted", None))
             return None
 
         winner = world.rankings()[0][0]
-        emit(
-            {
-                "type": "end",
-                "winner": winner,
-                "world": world.snapshot(),
-                "rankings": world.rankings(),
-            }
-        )
+        emit(end_event("end", winner))
         return winner
     except Exception as exc:
         emit({"type": "error", "message": str(exc)})

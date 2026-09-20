@@ -48,3 +48,31 @@ class FAISSMemory:
 
     def count(self):
         return len(self.memory_items)
+
+    def export(self):
+        """Return a JSON-serialisable snapshot of this memory."""
+        return {
+            "items": list(self.memory_items),
+            "reflections": list(self.reflections),
+        }
+
+    def import_data(self, data):
+        """Restore memory from ``export()`` output, rebuilding the FAISS index.
+
+        The vector index is not stored (it depends on the embedding model), so
+        it is rebuilt by re-embedding the saved texts. Embedding failures are
+        ignored, matching ``add``/``add_reflection`` behaviour.
+        """
+        if not data:
+            return
+        for text in data.get("items", []) or []:
+            if text not in self.memory_items:
+                self.memory_items.append(text)
+        for reflection in data.get("reflections", []) or []:
+            if reflection not in self.reflections:
+                self.reflections.append(reflection)
+        if self.memory_items:
+            try:
+                self.store.add_texts(list(self.memory_items))
+            except Exception:
+                pass

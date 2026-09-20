@@ -213,5 +213,6 @@ def build_all_agents(
             "memory": memory,
             "provider": provider,
             "model": model,
+            "llm": llm,
         }
     return agents

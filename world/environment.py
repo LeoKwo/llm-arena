@@ -180,6 +180,11 @@ class World:
         self.eliminated: list[str] = []
         self.spawns_this_turn: dict[str, int] = {name: 0 for name in agents}
         self.broadcasts: list[dict] = []
+        # Persistent log of every broadcast, kept for the end-of-game timeline
+        # chart and report. ``broadcasts`` above is the transient queue the
+        # Live Feed drains; this one is never cleared.
+        self.event_log: list[dict] = []
+        self.score_history: list[dict] = []
         self.capital_hold: dict[str, int] = {}
         self.last_score_delta: dict[str, float] = {name: 0.0 for name in agents}
         self._score_mark: dict[str, float] = {name: 0.0 for name in agents}
@@ -189,12 +194,32 @@ class World:
         return f" [score {int(before)} -> {int(after)}, {int(after) - int(before):+d}]"
 
     def _broadcast(self, kind: str, **data) -> None:
-        self.broadcasts.append({"kind": kind, **data})
+        note = {"kind": kind, "turn": self.turn, **data}
+        self.broadcasts.append(note)
+        self.event_log.append(note)
 
     def take_broadcasts(self) -> list[dict]:
         items = self.broadcasts
         self.broadcasts = []
         return items
+
+    def snapshot_scores(self) -> dict:
+        """Current score of every faction, rounded for display/serialisation."""
+        return {name: round(self.score(name), 1) for name in self.agents}
+
+    def record_scores(self) -> None:
+        """Append the current standings to ``score_history`` (one point/turn)."""
+        self.score_history.append(
+            {"turn": self.turn, "scores": self.snapshot_scores()}
+        )
+
+    def timeline(self) -> dict:
+        """Serialisable end-of-game history for charts and the news report."""
+        return {
+            "score_history": [dict(point) for point in self.score_history],
+            "events": [dict(event) for event in self.event_log],
+            "history": [dict(entry) for entry in self.history],
+        }
 
     # ------------------------------------------------------------------ lookup
     def living_agents(self) -> list[str]:
@@ -315,6 +340,8 @@ class World:
         self._score_mark[agent_name] = now
 
     def advance(self) -> None:
+        # Capture end-of-round standings before moving to the next turn.
+        self.record_scores()
         self.turn += 1
         for key in list(self.relations):
             value = self.relations[key]

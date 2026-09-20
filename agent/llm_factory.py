@@ -87,6 +87,21 @@ def get_api_key(provider, override=None):
     return None
 
 
+def report_env_config():
+    """Optional dedicated model for the end-of-game report, from .env.
+
+    Configured via ``REPORT_PROVIDER`` / ``REPORT_MODEL`` (and an optional
+    ``REPORT_API_KEY``). Returns ``None`` when no provider is set, in which case
+    the report falls back to the winning faction's model.
+    """
+    provider = (os.environ.get("REPORT_PROVIDER") or "").strip().lower()
+    if not provider:
+        return None
+    model = (os.environ.get("REPORT_MODEL") or "").strip() or None
+    api_key = (os.environ.get("REPORT_API_KEY") or "").strip() or None
+    return {"provider": provider, "model": model, "api_key": api_key}
+
+
 def provider_status(overrides=None):
     overrides = overrides or {}
     status = {}
